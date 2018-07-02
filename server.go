@@ -10,24 +10,10 @@ import (
 	"net/http"
 )
 
-type ChanListener struct {
-	parent *Port
-	queue  chan net.Conn
-}
-
-func (c *ChanListener) Accept() (net.Conn, error) {
-	return <-c.queue, nil
-}
-
-func (c *ChanListener) Close() error {
-	return nil
-}
-
-func (c *ChanListener) Addr() net.Addr {
-	return c.parent.addr
-}
-
-type Port struct {
+// MagicListener is a TCP network listener supporting TLS and
+// PROXY protocol automatically. It assumes no matter what the used protocol
+// is, at least 16 bytes will always be initially sent (true for HTTP).
+type MagicListener struct {
 	port      *net.TCPListener
 	addr      *net.TCPAddr
 	queue     chan net.Conn
@@ -35,8 +21,8 @@ type Port struct {
 	http      *http.Server
 }
 
-func Listen(network string, listen string) *Port {
-	r := new(Port)
+func Listen(network string, listen string) *MagicListener {
+	r := new(MagicListener)
 	var err error
 
 	r.addr, err = net.ResolveTCPAddr(network, listen)
@@ -60,21 +46,31 @@ func Listen(network string, listen string) *Port {
 	return r
 }
 
-func (r *Port) shutdown() {
+func (r *MagicListener) Accept() (net.Conn, error) {
+	// TODO implement timeouts?
+	return <-r.queue, nil
+}
+
+func (r *MagicListener) Close() error {
+	return r.port.Close()
+}
+
+func (r *MagicListener) Addr() net.Addr {
+	return r.addr
+}
+
+func (r *MagicListener) shutdown() {
 	r.port.Close()
 }
 
-func (r *Port) serverLoop() {
-	l := new(ChanListener)
-	l.parent = r
-	l.queue = r.queue
-	err := r.http.Serve(l)
+func (r *MagicListener) serverLoop() {
+	err := r.http.Serve(r)
 	if err != nil {
 		log.Printf("http: Failed to listen to socket %s: %s", r, err)
 	}
 }
 
-func (r *Port) listenLoop() {
+func (r *MagicListener) listenLoop() {
 	for {
 		c, err := r.port.AcceptTCP()
 		if err != nil {
@@ -86,7 +82,7 @@ func (r *Port) listenLoop() {
 	}
 }
 
-func (r *Port) handleNewConnection(c *net.TCPConn) {
+func (r *MagicListener) handleNewConnection(c *net.TCPConn) {
 	buf := make([]byte, 16)
 	n, err := io.ReadFull(c, buf)
 	if err != nil {
@@ -189,6 +185,6 @@ func (r *Port) handleNewConnection(c *net.TCPConn) {
 	r.queue <- cw
 }
 
-func (p *Port) String() string {
+func (p *MagicListener) String() string {
 	return p.addr.String()
 }
