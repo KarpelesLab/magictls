@@ -7,9 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
-	"net/http"
 )
 
 type queuePoint struct {
@@ -25,14 +23,13 @@ type MagicListener struct {
 	addr      *net.TCPAddr
 	queue     chan queuePoint
 	tlsConfig *tls.Config
-	http      *http.Server
 }
 
-func Listen(network string, listen string) *MagicListener {
+func Listen(network, laddr string, config *tls.Config) *MagicListener {
 	r := new(MagicListener)
 	var err error
 
-	r.addr, err = net.ResolveTCPAddr(network, listen)
+	r.addr, err = net.ResolveTCPAddr(network, laddr)
 	if err != nil {
 		panic(err)
 	}
@@ -42,12 +39,9 @@ func Listen(network string, listen string) *MagicListener {
 		panic(err)
 	}
 	r.queue = make(chan queuePoint)
-	r.tlsConfig = new(tls.Config)
-	r.tlsConfig.GetCertificate = retrieveTlsCertificate
-	r.tlsConfig.NextProtos = []string{"h2", "http/1.1"}
-	r.http = new(http.Server)
-	r.http.TLSConfig = r.tlsConfig
+	r.tlsConfig = config
 
+	// listenloop will accept connections then push them to the queue
 	go r.listenLoop()
 	return r
 }
@@ -68,10 +62,6 @@ func (r *MagicListener) Addr() net.Addr {
 
 func (r *MagicListener) shutdown() {
 	r.port.Close()
-}
-
-func (r *MagicListener) ServeHttp() error {
-	return r.http.Serve(r)
 }
 
 func (r *MagicListener) listenLoop() {
@@ -153,7 +143,9 @@ func (r *MagicListener) handleNewConnection(c *net.TCPConn) {
 
 		err = cw.parseProxyLine(buf[:pos])
 		if err != nil {
-			log.Printf("magictls: failed to parse PROXY line (%s): %s\n", buf[:pos], err)
+			r.queue <- queuePoint{e: fmt.Errorf("magictls: failed to parse PROXY line (%s): %s\n", buf[:pos], err)}
+			c.Close()
+			return
 		}
 
 		buf = buf[pos+1:]
@@ -162,7 +154,7 @@ func (r *MagicListener) handleNewConnection(c *net.TCPConn) {
 			xbuf := make([]byte, 16-len(buf))
 			n, err = io.ReadFull(c, xbuf)
 			if err != nil {
-				log.Printf("magictls: failed to read frame after proxy info: %s", err)
+				r.queue <- queuePoint{e: fmt.Errorf("magictls: failed to read frame after proxy info: %s", err)}
 				c.Close()
 				return
 			}
