@@ -60,25 +60,25 @@ func SetAllowedProxies(cidrs []string) error {
 //
 // If the connection uses TLS protocol, then Accept() returned net.Conn will
 // actually be a tls.Conn object.
-func Listen(network, laddr string, config *tls.Config) net.Listener {
+func Listen(network, laddr string, config *tls.Config) (net.Listener, error) {
 	r := new(magiclListener)
 	var err error
 
 	r.addr, err = net.ResolveTCPAddr(network, laddr)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	r.port, err = net.ListenTCP(network, r.addr)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	r.queue = make(chan queuePoint)
 	r.tlsConfig = config
 
 	// listenloop will accept connections then push them to the queue
 	go r.listenLoop()
-	return r
+	return r, nil
 }
 
 func (r *magiclListener) Accept() (net.Conn, error) {
