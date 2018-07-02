@@ -27,7 +27,8 @@ type magiclListener struct {
 
 // Listen creates a hybrid TCP/TLS listener accepting connections on the given
 // network address using net.Listen. The configuration config must be non-nil
-// and must include at least one certificate or else set GetCertificate.
+// and must include at least one certificate or else set GetCertificate. If
+// not, then only PROXY protocol support will be available.
 //
 // If the connection uses TLS protocol, then Accept() returned net.Conn will
 // actually be a tls.Conn object.
@@ -168,6 +169,12 @@ func (r *magiclListener) handleNewConnection(c *net.TCPConn) {
 		}
 		cw.rbuf = buf
 		cw.rbuflen = len(buf)
+	}
+
+	if r.tlsConfig == nil {
+		// send to queue without checking for tls
+		r.queue <- queuePoint{c: cw}
+		return
 	}
 
 	if buf[0]&0x80 == 0x80 {
