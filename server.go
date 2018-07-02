@@ -25,6 +25,34 @@ type magiclListener struct {
 	tlsConfig *tls.Config
 }
 
+var allowedProxyIps []*net.IPNet
+
+func init() {
+	SetAllowedProxies([]string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fd00::/8"})
+}
+
+// SetAllowedProxies allows modifying the list of IP addresses allowed to use
+// proxy protocol. Any host matching a CIDR listed in here will be trusted to
+// provide the client's real IP.
+//
+// By default all local IPs are allowed as these cannot appear on Internet.
+//
+// SetAllowedProxies([]string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fd00::/8"})
+func SetAllowedProxies(cidrs []string) error {
+	allowed := []*net.IPNet{}
+
+	for _, s := range cidrs {
+		_, ipn, err := net.ParseCIDR(s)
+		if err != nil {
+			return err
+		}
+		allowed = append(allowed, ipn)
+	}
+
+	allowedProxyIps = allowed
+	return nil
+}
+
 // Listen creates a hybrid TCP/TLS listener accepting connections on the given
 // network address using net.Listen. The configuration config must be non-nil
 // and must include at least one certificate or else set GetCertificate. If
@@ -105,70 +133,83 @@ func (r *magiclListener) handleNewConnection(c *net.TCPConn) {
 	cw.l = c.LocalAddr()
 	cw.r = c.RemoteAddr()
 
-	if bytes.Compare(buf[:12], []byte{0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0x0d, 0x0a, 0x51, 0x55, 0x49, 0x54, 0x0a}) == 0 {
-		// proxy protocol v2
-		b := bytes.NewBuffer(buf[12:])
-		var verCmd, fam uint8
-		var ln uint16
-		binary.Read(b, binary.BigEndian, &verCmd)
-		binary.Read(b, binary.BigEndian, &fam)
-		binary.Read(b, binary.BigEndian, &ln)
-		d := make([]byte, ln)
-		if ln > 0 {
-			_, err := io.ReadFull(c, d)
-			if err != nil {
-				r.queue <- queuePoint{e: errors.New("magictls: failed to read proxy v2 data")}
-				c.Close()
-				return
-			}
-		}
-		cw.parseProxyV2Data(verCmd, fam, d)
-	} else if bytes.Compare(buf[:6], []byte("PROXY ")) == 0 {
-		// proxy protocol v1
-		pr := make([]byte, 128) // max proxy line length is 107 bytes in theory
-		var pos int
-
-		for {
-			n, err = c.Read(pr)
-			if err != nil {
-				r.queue <- queuePoint{e: errors.New("magictls: failed to read full line of proxy protocol")}
-				c.Close()
-				return
-			}
-			buf = append(buf, pr[:n]...)
-
-			pos = bytes.IndexByte(buf, '\n')
-			if pos > 0 {
+	proxyAllow := false
+	ipaddr, ok := cw.r.(*net.IPAddr)
+	if ok {
+		for _, n := range allowedProxyIps {
+			if n.Contains(ipaddr.IP) {
+				proxyAllow = true
 				break
 			}
-			if len(buf) > 128 {
-				r.queue <- queuePoint{e: errors.New("magictls: got proxy protocol intro but line is too long, closing connection")}
-				c.Close()
-				return
+		}
+	}
+
+	if proxyAllow {
+		if bytes.Compare(buf[:12], []byte{0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0x0d, 0x0a, 0x51, 0x55, 0x49, 0x54, 0x0a}) == 0 {
+			// proxy protocol v2
+			b := bytes.NewBuffer(buf[12:])
+			var verCmd, fam uint8
+			var ln uint16
+			binary.Read(b, binary.BigEndian, &verCmd)
+			binary.Read(b, binary.BigEndian, &fam)
+			binary.Read(b, binary.BigEndian, &ln)
+			d := make([]byte, ln)
+			if ln > 0 {
+				_, err := io.ReadFull(c, d)
+				if err != nil {
+					r.queue <- queuePoint{e: errors.New("magictls: failed to read proxy v2 data")}
+					c.Close()
+					return
+				}
 			}
-		}
+			cw.parseProxyV2Data(verCmd, fam, d)
+		} else if bytes.Compare(buf[:6], []byte("PROXY ")) == 0 {
+			// proxy protocol v1
+			pr := make([]byte, 128) // max proxy line length is 107 bytes in theory
+			var pos int
 
-		err = cw.parseProxyLine(buf[:pos])
-		if err != nil {
-			r.queue <- queuePoint{e: fmt.Errorf("magictls: failed to parse PROXY line (%s): %s\n", buf[:pos], err)}
-			c.Close()
-			return
-		}
+			for {
+				n, err = c.Read(pr)
+				if err != nil {
+					r.queue <- queuePoint{e: errors.New("magictls: failed to read full line of proxy protocol")}
+					c.Close()
+					return
+				}
+				buf = append(buf, pr[:n]...)
 
-		buf = buf[pos+1:]
+				pos = bytes.IndexByte(buf, '\n')
+				if pos > 0 {
+					break
+				}
+				if len(buf) > 128 {
+					r.queue <- queuePoint{e: errors.New("magictls: got proxy protocol intro but line is too long, closing connection")}
+					c.Close()
+					return
+				}
+			}
 
-		if len(buf) < 16 {
-			xbuf := make([]byte, 16-len(buf))
-			n, err = io.ReadFull(c, xbuf)
+			err = cw.parseProxyLine(buf[:pos])
 			if err != nil {
-				r.queue <- queuePoint{e: fmt.Errorf("magictls: failed to read frame after proxy info: %s", err)}
+				r.queue <- queuePoint{e: fmt.Errorf("magictls: failed to parse PROXY line (%s): %s\n", buf[:pos], err)}
 				c.Close()
 				return
 			}
-			buf = append(buf, xbuf[:n]...)
+
+			buf = buf[pos+1:]
+
+			if len(buf) < 16 {
+				xbuf := make([]byte, 16-len(buf))
+				n, err = io.ReadFull(c, xbuf)
+				if err != nil {
+					r.queue <- queuePoint{e: fmt.Errorf("magictls: failed to read frame after proxy info: %s", err)}
+					c.Close()
+					return
+				}
+				buf = append(buf, xbuf[:n]...)
+			}
+			cw.rbuf = buf
+			cw.rbuflen = len(buf)
 		}
-		cw.rbuf = buf
-		cw.rbuflen = len(buf)
 	}
 
 	if r.tlsConfig == nil {
