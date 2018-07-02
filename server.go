@@ -4,11 +4,18 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
 )
+
+type queuePoint struct {
+	c net.Conn
+	e error
+}
 
 // MagicListener is a TCP network listener supporting TLS and
 // PROXY protocol automatically. It assumes no matter what the used protocol
@@ -16,7 +23,7 @@ import (
 type MagicListener struct {
 	port      *net.TCPListener
 	addr      *net.TCPAddr
-	queue     chan net.Conn
+	queue     chan queuePoint
 	tlsConfig *tls.Config
 	http      *http.Server
 }
@@ -34,7 +41,7 @@ func Listen(network string, listen string) *MagicListener {
 	if err != nil {
 		panic(err)
 	}
-	r.queue = make(chan net.Conn)
+	r.queue = make(chan queuePoint)
 	r.tlsConfig = new(tls.Config)
 	r.tlsConfig.GetCertificate = retrieveTlsCertificate
 	r.tlsConfig.NextProtos = []string{"h2", "http/1.1"}
@@ -42,13 +49,13 @@ func Listen(network string, listen string) *MagicListener {
 	r.http.TLSConfig = r.tlsConfig
 
 	go r.listenLoop()
-	go r.serverLoop()
 	return r
 }
 
 func (r *MagicListener) Accept() (net.Conn, error) {
 	// TODO implement timeouts?
-	return <-r.queue, nil
+	p := <-r.queue
+	return p.c, p.e
 }
 
 func (r *MagicListener) Close() error {
@@ -63,18 +70,15 @@ func (r *MagicListener) shutdown() {
 	r.port.Close()
 }
 
-func (r *MagicListener) serverLoop() {
-	err := r.http.Serve(r)
-	if err != nil {
-		log.Printf("http: Failed to listen to socket %s: %s", r, err)
-	}
+func (r *MagicListener) ServeHttp() error {
+	return r.http.Serve(r)
 }
 
 func (r *MagicListener) listenLoop() {
 	for {
 		c, err := r.port.AcceptTCP()
 		if err != nil {
-			log.Printf("http: failed to accept connection: %s", err)
+			r.queue <- queuePoint{e: err}
 			return
 		} else {
 			go r.handleNewConnection(c)
@@ -87,17 +91,17 @@ func (r *MagicListener) handleNewConnection(c *net.TCPConn) {
 	n, err := io.ReadFull(c, buf)
 	if err != nil {
 		if err != io.EOF {
-			log.Printf("Failed reading from connection: %s", err)
+			r.queue <- queuePoint{e: fmt.Errorf("magictls: failed reading from connection: %s", err)}
 		}
 		c.Close()
 		return
 	}
 	if n != 16 {
-		log.Printf("Failed reading at least 16 bytes from connection: %s", err)
+		r.queue <- queuePoint{e: fmt.Errorf("magictls: failed reading at least 16 bytes from connection: %s", err)}
 		c.Close()
 		return
 	}
-	cw := new(WConn)
+	cw := new(magicTlsBuffer)
 	cw.conn = c
 	cw.rbuf = buf
 	cw.rbuflen = len(buf)
@@ -116,7 +120,7 @@ func (r *MagicListener) handleNewConnection(c *net.TCPConn) {
 		if ln > 0 {
 			_, err := io.ReadFull(c, d)
 			if err != nil {
-				log.Printf("http: failed to read proxy v2 data")
+				r.queue <- queuePoint{e: errors.New("magictls: failed to read proxy v2 data")}
 				c.Close()
 				return
 			}
@@ -130,7 +134,7 @@ func (r *MagicListener) handleNewConnection(c *net.TCPConn) {
 		for {
 			n, err = c.Read(pr)
 			if err != nil {
-				log.Printf("http: failed to read full line of proxy protocol")
+				r.queue <- queuePoint{e: errors.New("magictls: failed to read full line of proxy protocol")}
 				c.Close()
 				return
 			}
@@ -141,7 +145,7 @@ func (r *MagicListener) handleNewConnection(c *net.TCPConn) {
 				break
 			}
 			if len(buf) > 128 {
-				log.Printf("http: got proxy protocol intro but line is too long, closing connection")
+				r.queue <- queuePoint{e: errors.New("magictls: got proxy protocol intro but line is too long, closing connection")}
 				c.Close()
 				return
 			}
@@ -149,7 +153,7 @@ func (r *MagicListener) handleNewConnection(c *net.TCPConn) {
 
 		err = cw.parseProxyLine(buf[:pos])
 		if err != nil {
-			log.Printf("http: failed to parse PROXY line (%s): %s\n", buf[:pos], err)
+			log.Printf("magictls: failed to parse PROXY line (%s): %s\n", buf[:pos], err)
 		}
 
 		buf = buf[pos+1:]
@@ -158,7 +162,7 @@ func (r *MagicListener) handleNewConnection(c *net.TCPConn) {
 			xbuf := make([]byte, 16-len(buf))
 			n, err = io.ReadFull(c, xbuf)
 			if err != nil {
-				log.Printf("http: failed to read frame after proxy info: %s", err)
+				log.Printf("magictls: failed to read frame after proxy info: %s", err)
 				c.Close()
 				return
 			}
@@ -171,18 +175,18 @@ func (r *MagicListener) handleNewConnection(c *net.TCPConn) {
 	if buf[0]&0x80 == 0x80 {
 		// SSLv2, probably. At least, not HTTP
 		cs := tls.Server(cw, r.tlsConfig)
-		r.queue <- cs
+		r.queue <- queuePoint{c: cs}
 		return
 	}
 	if buf[0] == 0x16 {
 		// SSLv3, TLS
 		cs := tls.Server(cw, r.tlsConfig)
-		r.queue <- cs
+		r.queue <- queuePoint{c: cs}
 		return
 	}
 
 	// send to serve
-	r.queue <- cw
+	r.queue <- queuePoint{c: cw}
 }
 
 func (p *MagicListener) String() string {

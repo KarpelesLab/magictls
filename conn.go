@@ -9,14 +9,14 @@ import (
 	"time"
 )
 
-type WConn struct {
+type magicTlsBuffer struct {
 	conn    net.Conn
 	rbuf    []byte
 	rbuflen int
 	l, r    net.Addr
 }
 
-func (c *WConn) Read(b []byte) (int, error) {
+func (c *magicTlsBuffer) Read(b []byte) (int, error) {
 	if c.rbuflen > 0 {
 		if len(b) == c.rbuflen {
 			n := copy(b, c.rbuf)
@@ -39,35 +39,35 @@ func (c *WConn) Read(b []byte) (int, error) {
 	return c.conn.Read(b)
 }
 
-func (c *WConn) Write(b []byte) (int, error) {
+func (c *magicTlsBuffer) Write(b []byte) (int, error) {
 	return c.conn.Write(b)
 }
 
-func (c *WConn) Close() error {
+func (c *magicTlsBuffer) Close() error {
 	return c.conn.Close()
 }
 
-func (c *WConn) LocalAddr() net.Addr {
+func (c *magicTlsBuffer) LocalAddr() net.Addr {
 	return c.l
 }
 
-func (c *WConn) RemoteAddr() net.Addr {
+func (c *magicTlsBuffer) RemoteAddr() net.Addr {
 	return c.r
 }
 
-func (c *WConn) SetDeadline(t time.Time) error {
+func (c *magicTlsBuffer) SetDeadline(t time.Time) error {
 	return c.conn.SetDeadline(t)
 }
 
-func (c *WConn) SetReadDeadline(t time.Time) error {
+func (c *magicTlsBuffer) SetReadDeadline(t time.Time) error {
 	return c.conn.SetReadDeadline(t)
 }
 
-func (c *WConn) SetWriteDeadline(t time.Time) error {
+func (c *magicTlsBuffer) SetWriteDeadline(t time.Time) error {
 	return c.conn.SetWriteDeadline(t)
 }
 
-func (c *WConn) parseProxyLine(buf []byte) error {
+func (c *magicTlsBuffer) parseProxyLine(buf []byte) error {
 	s := bytes.Split(buf, []byte{' '})
 	if bytes.Compare(s[0], []byte("PROXY")) != 0 {
 		return errors.New("magictls: invalid proxy line provided")
@@ -91,7 +91,7 @@ func (c *WConn) parseProxyLine(buf []byte) error {
 	}
 }
 
-func (c *WConn) parseProxyV2Data(verCmd, fam uint8, d []byte) error {
+func (c *magicTlsBuffer) parseProxyV2Data(verCmd, fam uint8, d []byte) error {
 	if verCmd>>4&0xf != 0x2 {
 		return errors.New("magictls: unsupported PROXYv2 header version")
 	}
