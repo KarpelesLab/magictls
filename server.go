@@ -15,18 +15,18 @@ type queuePoint struct {
 	e error
 }
 
-// MagicListener is a TCP network listener supporting TLS and
+// magiclListener is a TCP network listener supporting TLS and
 // PROXY protocol automatically. It assumes no matter what the used protocol
 // is, at least 16 bytes will always be initially sent (true for HTTP).
-type MagicListener struct {
+type magiclListener struct {
 	port      *net.TCPListener
 	addr      *net.TCPAddr
 	queue     chan queuePoint
 	tlsConfig *tls.Config
 }
 
-func Listen(network, laddr string, config *tls.Config) *MagicListener {
-	r := new(MagicListener)
+func Listen(network, laddr string, config *tls.Config) net.Listener {
+	r := new(magiclListener)
 	var err error
 
 	r.addr, err = net.ResolveTCPAddr(network, laddr)
@@ -46,25 +46,25 @@ func Listen(network, laddr string, config *tls.Config) *MagicListener {
 	return r
 }
 
-func (r *MagicListener) Accept() (net.Conn, error) {
+func (r *magiclListener) Accept() (net.Conn, error) {
 	// TODO implement timeouts?
 	p := <-r.queue
 	return p.c, p.e
 }
 
-func (r *MagicListener) Close() error {
+func (r *magiclListener) Close() error {
 	return r.port.Close()
 }
 
-func (r *MagicListener) Addr() net.Addr {
+func (r *magiclListener) Addr() net.Addr {
 	return r.addr
 }
 
-func (r *MagicListener) shutdown() {
+func (r *magiclListener) shutdown() {
 	r.port.Close()
 }
 
-func (r *MagicListener) listenLoop() {
+func (r *magiclListener) listenLoop() {
 	for {
 		c, err := r.port.AcceptTCP()
 		if err != nil {
@@ -76,7 +76,7 @@ func (r *MagicListener) listenLoop() {
 	}
 }
 
-func (r *MagicListener) handleNewConnection(c *net.TCPConn) {
+func (r *magiclListener) handleNewConnection(c *net.TCPConn) {
 	buf := make([]byte, 16)
 	n, err := io.ReadFull(c, buf)
 	if err != nil {
@@ -181,6 +181,6 @@ func (r *MagicListener) handleNewConnection(c *net.TCPConn) {
 	r.queue <- queuePoint{c: cw}
 }
 
-func (p *MagicListener) String() string {
+func (p *magiclListener) String() string {
 	return p.addr.String()
 }
