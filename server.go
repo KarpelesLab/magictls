@@ -25,6 +25,12 @@ type magiclListener struct {
 	tlsConfig *tls.Config
 }
 
+// Listen creates a hybrid TCP/TLS listener accepting connections on the given
+// network address using net.Listen. The configuration config must be non-nil
+// and must include at least one certificate or else set GetCertificate.
+//
+// If the connection uses TLS protocol, then Accept() returned net.Conn will
+// actually be a tls.Conn object.
 func Listen(network, laddr string, config *tls.Config) net.Listener {
 	r := new(magiclListener)
 	var err error
