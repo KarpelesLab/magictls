@@ -15,10 +15,10 @@ type queuePoint struct {
 	e error
 }
 
-// magiclListener is a TCP network listener supporting TLS and
+// MagicListener is a TCP network listener supporting TLS and
 // PROXY protocol automatically. It assumes no matter what the used protocol
 // is, at least 16 bytes will always be initially sent (true for HTTP).
-type magiclListener struct {
+type MagicListener struct {
 	port      *net.TCPListener
 	addr      *net.TCPAddr
 	queue     chan queuePoint
@@ -60,8 +60,8 @@ func SetAllowedProxies(cidrs []string) error {
 //
 // If the connection uses TLS protocol, then Accept() returned net.Conn will
 // actually be a tls.Conn object.
-func Listen(network, laddr string, config *tls.Config) (net.Listener, error) {
-	r := new(magiclListener)
+func Listen(network, laddr string, config *tls.Config) (*MagicListener, error) {
+	r := new(MagicListener)
 	var err error
 
 	r.addr, err = net.ResolveTCPAddr(network, laddr)
@@ -81,25 +81,31 @@ func Listen(network, laddr string, config *tls.Config) (net.Listener, error) {
 	return r, nil
 }
 
-func (r *magiclListener) Accept() (net.Conn, error) {
+// PushConn allows pushing an existing connection to the queue as if it had
+// just been accepted by the server.
+func (r *MagicListener) PushConn(c net.Conn) {
+	r.queue <- queuePoint{c: c}
+}
+
+func (r *MagicListener) Accept() (net.Conn, error) {
 	// TODO implement timeouts?
 	p := <-r.queue
 	return p.c, p.e
 }
 
-func (r *magiclListener) Close() error {
+func (r *MagicListener) Close() error {
 	return r.port.Close()
 }
 
-func (r *magiclListener) Addr() net.Addr {
+func (r *MagicListener) Addr() net.Addr {
 	return r.addr
 }
 
-func (r *magiclListener) shutdown() {
+func (r *MagicListener) shutdown() {
 	r.port.Close()
 }
 
-func (r *magiclListener) listenLoop() {
+func (r *MagicListener) listenLoop() {
 	for {
 		c, err := r.port.AcceptTCP()
 		if err != nil {
@@ -111,7 +117,7 @@ func (r *magiclListener) listenLoop() {
 	}
 }
 
-func (r *magiclListener) handleNewConnection(c *net.TCPConn) {
+func (r *MagicListener) handleNewConnection(c *net.TCPConn) {
 	buf := make([]byte, 16)
 	n, err := io.ReadFull(c, buf)
 	if err != nil {
@@ -235,6 +241,6 @@ func (r *magiclListener) handleNewConnection(c *net.TCPConn) {
 	r.queue <- queuePoint{c: cw}
 }
 
-func (p *magiclListener) String() string {
+func (p *MagicListener) String() string {
 	return p.addr.String()
 }
