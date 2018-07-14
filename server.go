@@ -28,7 +28,7 @@ type MagicListener struct {
 var allowedProxyIps []*net.IPNet
 
 func init() {
-	SetAllowedProxies([]string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fd00::/8"})
+	SetAllowedProxies([]string{"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1/128", "fd00::/8"})
 }
 
 // SetAllowedProxies allows modifying the list of IP addresses allowed to use
@@ -140,8 +140,15 @@ func (r *MagicListener) handleNewConnection(c *net.TCPConn) {
 	cw.r = c.RemoteAddr()
 
 	proxyAllow := false
-	ipaddr, ok := cw.r.(*net.IPAddr)
-	if ok {
+	switch ipaddr := cw.r.(type) {
+	case *net.TCPAddr:
+		for _, n := range allowedProxyIps {
+			if n.Contains(ipaddr.IP) {
+				proxyAllow = true
+				break
+			}
+		}
+	case *net.IPAddr:
 		for _, n := range allowedProxyIps {
 			if n.Contains(ipaddr.IP) {
 				proxyAllow = true
