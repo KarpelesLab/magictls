@@ -217,7 +217,9 @@ func (r *MagicListener) handleNewConnection(c *net.TCPConn) {
 					c.Close()
 					return
 				}
-				buf = append(buf, xbuf[:n]...)
+				if n > 0 {
+					buf = append(buf, xbuf[:n]...)
+				}
 			}
 			cw.rbuf = buf
 			cw.rbuflen = len(buf)
@@ -226,6 +228,12 @@ func (r *MagicListener) handleNewConnection(c *net.TCPConn) {
 
 	if r.tlsConfig == nil {
 		// send to queue without checking for tls
+		r.queue <- queuePoint{c: cw}
+		return
+	}
+
+	if len(buf) == 0 {
+		// likely got a EOF earlier and no data was read past the PROXY header
 		r.queue <- queuePoint{c: cw}
 		return
 	}
