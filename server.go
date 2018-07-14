@@ -119,24 +119,22 @@ func (r *MagicListener) listenLoop() {
 func (r *MagicListener) handleNewConnection(c *net.TCPConn) {
 	buf := make([]byte, 16)
 	n, err := io.ReadFull(c, buf)
-	if err != nil {
-		if err != io.EOF {
-			log.Printf("magictls: failed reading from connection: %s", err)
-		}
-		c.Close()
-		return
-	}
-	if n != 16 {
-		log.Printf("magictls: failed reading at least 16 bytes from connection: %s", err)
+	if (err != nil) && (err != io.EOF) {
+		log.Printf("magictls: failed reading from connection: %s", err)
 		c.Close()
 		return
 	}
 	cw := new(magicTlsBuffer)
 	cw.conn = c
 	cw.rbuf = buf
-	cw.rbuflen = len(buf)
+	cw.rbuflen = n
 	cw.l = c.LocalAddr()
 	cw.r = c.RemoteAddr()
+	if n < 16 {
+		// less than 16 bytes of data means we reached EOF, implying this isn't SSL or PROXY header, pass along
+		r.queue <- queuePoint{c: cw}
+		return
+	}
 
 	proxyAllow := false
 	switch ipaddr := cw.r.(type) {
