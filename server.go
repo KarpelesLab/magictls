@@ -4,9 +4,8 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/binary"
-	"errors"
-	"fmt"
 	"io"
+	"log"
 	"net"
 )
 
@@ -122,13 +121,13 @@ func (r *MagicListener) handleNewConnection(c *net.TCPConn) {
 	n, err := io.ReadFull(c, buf)
 	if err != nil {
 		if err != io.EOF {
-			r.queue <- queuePoint{e: fmt.Errorf("magictls: failed reading from connection: %s", err)}
+			log.Printf("magictls: failed reading from connection: %s", err)
 		}
 		c.Close()
 		return
 	}
 	if n != 16 {
-		r.queue <- queuePoint{e: fmt.Errorf("magictls: failed reading at least 16 bytes from connection: %s", err)}
+		log.Printf("magictls: failed reading at least 16 bytes from connection: %s", err)
 		c.Close()
 		return
 	}
@@ -170,7 +169,7 @@ func (r *MagicListener) handleNewConnection(c *net.TCPConn) {
 			if ln > 0 {
 				_, err := io.ReadFull(c, d)
 				if err != nil {
-					r.queue <- queuePoint{e: errors.New("magictls: failed to read proxy v2 data")}
+					log.Printf("magictls: failed to read proxy v2 data")
 					c.Close()
 					return
 				}
@@ -184,7 +183,7 @@ func (r *MagicListener) handleNewConnection(c *net.TCPConn) {
 			for {
 				n, err = c.Read(pr)
 				if err != nil {
-					r.queue <- queuePoint{e: errors.New("magictls: failed to read full line of proxy protocol")}
+					log.Printf("magictls: failed to read full line of proxy protocol")
 					c.Close()
 					return
 				}
@@ -195,7 +194,7 @@ func (r *MagicListener) handleNewConnection(c *net.TCPConn) {
 					break
 				}
 				if len(buf) > 128 {
-					r.queue <- queuePoint{e: errors.New("magictls: got proxy protocol intro but line is too long, closing connection")}
+					log.Printf("magictls: got proxy protocol intro but line is too long, closing connection")
 					c.Close()
 					return
 				}
@@ -203,7 +202,7 @@ func (r *MagicListener) handleNewConnection(c *net.TCPConn) {
 
 			err = cw.parseProxyLine(buf[:pos])
 			if err != nil {
-				r.queue <- queuePoint{e: fmt.Errorf("magictls: failed to parse PROXY line (%s): %s\n", buf[:pos], err)}
+				log.Printf("magictls: failed to parse PROXY line (%s): %s\n", buf[:pos], err)
 				c.Close()
 				return
 			}
@@ -214,7 +213,7 @@ func (r *MagicListener) handleNewConnection(c *net.TCPConn) {
 				xbuf := make([]byte, 16-len(buf))
 				n, err = io.ReadFull(c, xbuf)
 				if err != nil {
-					r.queue <- queuePoint{e: fmt.Errorf("magictls: failed to read frame after proxy info: %s", err)}
+					log.Printf("magictls: failed to read frame after proxy info: %s", err)
 					c.Close()
 					return
 				}
