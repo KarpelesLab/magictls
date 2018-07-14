@@ -212,7 +212,7 @@ func (r *MagicListener) handleNewConnection(c *net.TCPConn) {
 			if len(buf) < 16 {
 				xbuf := make([]byte, 16-len(buf))
 				n, err = io.ReadFull(c, xbuf)
-				if err != nil {
+				if (err != nil) && (err != io.EOF) {
 					log.Printf("magictls: failed to read frame after proxy info: %s", err)
 					c.Close()
 					return
