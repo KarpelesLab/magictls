@@ -20,17 +20,10 @@ type magicTlsBuffer struct {
 
 func (c *magicTlsBuffer) Read(b []byte) (int, error) {
 	if c.rbuflen > 0 {
-		if len(b) == c.rbuflen {
+		if len(b) >= c.rbuflen {
 			n := copy(b, c.rbuf)
 			c.rbuflen = 0
 			return n, nil
-		}
-		if len(b) > c.rbuflen {
-			copy(b, c.rbuf)
-			n, err := c.conn.Read(b[c.rbuflen:])
-			n += c.rbuflen
-			c.rbuflen = 0
-			return n, err
 		}
 		// last case, rbuflen < b
 		n := copy(b, c.rbuf)
