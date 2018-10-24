@@ -80,6 +80,10 @@ func Listen(network, laddr string, config *tls.Config) (*MagicListener, error) {
 	return r, nil
 }
 
+func ListenNull() *MagicListener {
+	return &MagicListener{queue: make(chan queuePoint)}
+}
+
 // PushConn allows pushing an existing connection to the queue as if it had
 // just been accepted by the server.
 func (r *MagicListener) PushConn(c net.Conn) {
@@ -93,7 +97,13 @@ func (r *MagicListener) Accept() (net.Conn, error) {
 }
 
 func (r *MagicListener) Close() error {
-	return r.port.Close()
+	if r.port != nil {
+		if err := r.port.Close(); err != nil {
+			return err
+		}
+		r.port = nil
+	}
+	return nil
 }
 
 func (r *MagicListener) Addr() net.Addr {
@@ -101,7 +111,7 @@ func (r *MagicListener) Addr() net.Addr {
 }
 
 func (r *MagicListener) shutdown() {
-	r.port.Close()
+	r.Close()
 }
 
 func (r *MagicListener) listenLoop() {
