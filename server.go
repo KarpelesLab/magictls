@@ -7,11 +7,13 @@ import (
 	"io"
 	"log"
 	"net"
+	"time"
 )
 
 type queuePoint struct {
-	c net.Conn
-	e error
+	c  net.Conn
+	rc *net.TCPConn
+	e  error
 }
 
 // MagicListener is a TCP network listener supporting TLS and
@@ -96,6 +98,12 @@ func (r *MagicListener) Accept() (net.Conn, error) {
 	return p.c, p.e
 }
 
+func (r *MagicListener) AcceptRaw() (net.Conn, *net.TCPConn, error) {
+	// TODO implement timeouts?
+	p := <-r.queue
+	return p.c, p.rc, p.e
+}
+
 func (r *MagicListener) Close() error {
 	if r.port != nil {
 		if err := r.port.Close(); err != nil {
@@ -115,9 +123,23 @@ func (r *MagicListener) shutdown() {
 }
 
 func (r *MagicListener) listenLoop() {
+	var tempDelay time.Duration // how long to sleep on accept failure
 	for {
 		c, err := r.port.AcceptTCP()
 		if err != nil {
+			// check for temporary error
+			if ne, ok := err.(net.Error); ok && ne.Temporary() {
+				if tempDelay == 0 {
+					tempDelay = 5 * time.Millisecond
+				} else {
+					tempDelay *= 2
+				}
+				if max := 1 * time.Second; tempDelay > max {
+					tempDelay = max
+				}
+				time.Sleep(tempDelay)
+				continue
+			}
 			r.queue <- queuePoint{e: err}
 			return
 		} else {
@@ -142,7 +164,7 @@ func (r *MagicListener) handleNewConnection(c *net.TCPConn) {
 	cw.r = c.RemoteAddr()
 	if n < 16 {
 		// less than 16 bytes of data means we reached EOF, implying this isn't SSL or PROXY header, pass along
-		r.queue <- queuePoint{c: cw}
+		r.queue <- queuePoint{c: cw, rc: c}
 		return
 	}
 
@@ -236,31 +258,31 @@ func (r *MagicListener) handleNewConnection(c *net.TCPConn) {
 
 	if r.tlsConfig == nil {
 		// send to queue without checking for tls
-		r.queue <- queuePoint{c: cw}
+		r.queue <- queuePoint{c: cw, rc: c}
 		return
 	}
 
 	if len(buf) == 0 {
 		// likely got a EOF earlier and no data was read past the PROXY header
-		r.queue <- queuePoint{c: cw}
+		r.queue <- queuePoint{c: cw, rc: c}
 		return
 	}
 
 	if buf[0]&0x80 == 0x80 {
 		// SSLv2, probably. At least, not HTTP
 		cs := tls.Server(cw, r.tlsConfig)
-		r.queue <- queuePoint{c: cs}
+		r.queue <- queuePoint{c: cs, rc: c}
 		return
 	}
 	if buf[0] == 0x16 {
 		// SSLv3, TLS
 		cs := tls.Server(cw, r.tlsConfig)
-		r.queue <- queuePoint{c: cs}
+		r.queue <- queuePoint{c: cs, rc: c}
 		return
 	}
 
 	// send to serve
-	r.queue <- queuePoint{c: cw}
+	r.queue <- queuePoint{c: cw, rc: c}
 }
 
 func (p *MagicListener) String() string {
