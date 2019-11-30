@@ -3,8 +3,10 @@ package magictls
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"log"
 	"net"
+	"strconv"
 )
 
 var allowedProxyIps []*net.IPNet
@@ -82,7 +84,7 @@ func DetectProxy(cw *Conn, srv *MagicListener) error {
 			}
 			d = tmp[16:]
 		}
-		cw.parseProxyV2Data(verCmd, fam, d)
+		return parseProxyV2Data(cw, verCmd, fam, d)
 	} else if bytes.Compare(buf[:6], []byte("PROXY ")) == 0 {
 		// proxy protocol v1
 		var pos int
@@ -104,13 +106,105 @@ func DetectProxy(cw *Conn, srv *MagicListener) error {
 			}
 		}
 
-		err = cw.parseProxyLine(buf[:pos])
+		err := parseProxyLine(cw, buf[:pos])
 		if err != nil {
 			log.Printf("magictls: failed to parse PROXY line (%s): %s\n", buf[:pos], err)
 			return err
 		}
 
 		cw.SkipPeek(pos + 1)
+	}
+	return nil
+}
+
+func parseProxyLine(c *Conn, buf []byte) error {
+	s := bytes.Split(buf, []byte{' '})
+	if bytes.Compare(s[0], []byte("PROXY")) != 0 {
+		return errors.New("magictls: invalid proxy line provided")
+	}
+
+	// see: magictls://www.haproxy.org/download/1.5/doc/proxy-protocol.txt
+	switch string(s[1]) {
+	case "UNKNOWN":
+		return nil // do nothing
+	case "TCP4", "TCP6":
+		if len(s) < 6 {
+			return errors.New("magictls: not enough parameters for TCP PROXY")
+		}
+		rPort, _ := strconv.Atoi(string(s[4]))
+		lPort, _ := strconv.Atoi(string(s[5]))
+		c.r = &net.TCPAddr{IP: net.ParseIP(string(s[2])), Port: rPort}
+		c.l = &net.TCPAddr{IP: net.ParseIP(string(s[3])), Port: lPort}
+		return nil
+	default:
+		return errors.New("magictls: invalid proxy transport provided")
+	}
+}
+
+func parseProxyV2Data(c *Conn, verCmd, fam uint8, d []byte) error {
+	if verCmd>>4&0xf != 0x2 {
+		return errors.New("magictls: unsupported PROXYv2 header version")
+	}
+	switch verCmd & 0xf {
+	case 0x0: // LOCAL (health check, etc)
+		return nil
+	case 0x1: // PROXY
+		break
+	default:
+		return errors.New("magictls: unsupported proxy type data")
+	}
+
+	switch fam >> 4 & 0xf {
+	case 0x0: // UNSPEC
+		return nil
+	case 0x1, 0x2: // AF_INET, AF_INET6
+		break
+	case 0x3: // AF_UNIX
+		return nil
+	default:
+		return errors.New("magictls: unsupported proxy address family")
+	}
+
+	switch fam & 0xf {
+	case 0x0: // UNSPEC
+		return nil
+	case 0x1, 0x2: // STREAM, DGRAM
+		break
+	default:
+		return errors.New("magictls: unsupported proxy protocol")
+	}
+
+	// sanitarization done, let's parse data
+	b := bytes.NewBuffer(d)
+	var rPort, lPort uint16
+
+	switch fam >> 4 & 0xf {
+	case 0x1: // AF_INET
+		if len(d) < 12 {
+			return errors.New("magictls: not enough data in proxy v2 header for ipv4")
+		}
+		rip := make([]byte, 4)
+		lip := make([]byte, 4)
+		binary.Read(b, binary.BigEndian, rip)
+		binary.Read(b, binary.BigEndian, lip)
+		binary.Read(b, binary.BigEndian, &lPort)
+		binary.Read(b, binary.BigEndian, &rPort)
+
+		c.r = &net.TCPAddr{IP: rip, Port: int(rPort)}
+		c.l = &net.TCPAddr{IP: lip, Port: int(lPort)}
+	case 0x2: // AF_INET6
+		if len(d) < 36 {
+			return errors.New("magictls: not enough data in proxy v2 header for ipv6")
+		}
+		rip := make([]byte, 16)
+		lip := make([]byte, 16)
+		binary.Read(b, binary.BigEndian, rip)
+		binary.Read(b, binary.BigEndian, lip)
+		binary.Read(b, binary.BigEndian, &lPort)
+		binary.Read(b, binary.BigEndian, &rPort)
+
+		c.r = &net.TCPAddr{IP: rip, Port: int(rPort)}
+		c.l = &net.TCPAddr{IP: lip, Port: int(lPort)}
 	}
 	return nil
 }
