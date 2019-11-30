@@ -45,7 +45,7 @@ func Listen(network, laddr string, config *tls.Config) (*MagicListener, error) {
 	if err != nil {
 		return nil, err
 	}
-	r.queue = make(chan queuePoint)
+	r.queue = make(chan queuePoint, 8)
 	r.TLSConfig = config
 	r.Filters = []Filter{DetectProxy, DetectTLS}
 
@@ -58,13 +58,7 @@ func Listen(network, laddr string, config *tls.Config) (*MagicListener, error) {
 // but can be used to push connections via PushConn. This can be useful to use
 // a http.Server with custom listeners.
 func ListenNull() *MagicListener {
-	return &MagicListener{queue: make(chan queuePoint)}
-}
-
-// PushConn allows pushing an existing connection to the queue as if it had
-// just been accepted by the server. No auto-detection will be performed.
-func (r *MagicListener) PushConn(c net.Conn) {
-	r.queue <- queuePoint{c: c}
+	return &MagicListener{queue: make(chan queuePoint, 8)}
 }
 
 // Accept blocks until a connection is available, then return said connection
@@ -158,6 +152,12 @@ func (r *MagicListener) listenLoop() {
 			go r.HandleConn(c)
 		}
 	}
+}
+
+// PushConn allows pushing an existing connection to the queue as if it had
+// just been accepted by the server. No auto-detection will be performed.
+func (r *MagicListener) PushConn(c net.Conn) {
+	r.queue <- queuePoint{c: c}
 }
 
 // HandleConn will run detection on a given incoming connection and attempt to
