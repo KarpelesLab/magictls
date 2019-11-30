@@ -23,7 +23,8 @@ type MagicListener struct {
 	port      *net.TCPListener
 	addr      *net.TCPAddr
 	queue     chan queuePoint
-	tlsConfig *tls.Config
+	TLSConfig *tls.Config
+	Mode      TLSMode
 }
 
 var allowedProxyIps []*net.IPNet
@@ -75,19 +76,22 @@ func Listen(network, laddr string, config *tls.Config) (*MagicListener, error) {
 		return nil, err
 	}
 	r.queue = make(chan queuePoint)
-	r.tlsConfig = config
+	r.TLSConfig = config
 
 	// listenloop will accept connections then push them to the queue
 	go r.listenLoop()
 	return r, nil
 }
 
+// ListenNull creates a listener that is not actually listening to anything,
+// but can be used to push connections via PushConn. This can be useful to use
+// a http.Server with custom listeners.
 func ListenNull() *MagicListener {
 	return &MagicListener{queue: make(chan queuePoint)}
 }
 
 // PushConn allows pushing an existing connection to the queue as if it had
-// just been accepted by the server.
+// just been accepted by the server. No auto-detection will be performed.
 func (r *MagicListener) PushConn(c net.Conn) {
 	r.queue <- queuePoint{c: c}
 }
@@ -143,12 +147,14 @@ func (r *MagicListener) listenLoop() {
 			r.queue <- queuePoint{e: err}
 			return
 		} else {
-			go r.handleNewConnection(c)
+			go r.HandleConn(c)
 		}
 	}
 }
 
-func (r *MagicListener) handleNewConnection(c *net.TCPConn) {
+// HandleConn will run detection on a given incoming connection and attempt to
+// find if it should parse any kind of PROXY headers, or TLS handshake/etc.
+func (r *MagicListener) HandleConn(c *net.TCPConn) {
 	buf := make([]byte, 16)
 	n, err := io.ReadFull(c, buf)
 	if (err != nil) && (err != io.EOF) {
@@ -256,7 +262,7 @@ func (r *MagicListener) handleNewConnection(c *net.TCPConn) {
 		}
 	}
 
-	if r.tlsConfig == nil {
+	if r.TLSConfig == nil {
 		// send to queue without checking for tls
 		r.queue <- queuePoint{c: cw, rc: c}
 		return
@@ -268,15 +274,27 @@ func (r *MagicListener) handleNewConnection(c *net.TCPConn) {
 		return
 	}
 
+	switch r.Mode {
+	case Always:
+		// don't think
+		cs := tls.Server(cw, r.TLSConfig)
+		r.queue <- queuePoint{c: cs, rc: c}
+		return
+	case Never:
+		r.queue <- queuePoint{c: cw, rc: c}
+		return
+	}
+
+	// perform auto-detection
 	if buf[0]&0x80 == 0x80 {
 		// SSLv2, probably. At least, not HTTP
-		cs := tls.Server(cw, r.tlsConfig)
+		cs := tls.Server(cw, r.TLSConfig)
 		r.queue <- queuePoint{c: cs, rc: c}
 		return
 	}
 	if buf[0] == 0x16 {
 		// SSLv3, TLS
-		cs := tls.Server(cw, r.tlsConfig)
+		cs := tls.Server(cw, r.TLSConfig)
 		r.queue <- queuePoint{c: cs, rc: c}
 		return
 	}
