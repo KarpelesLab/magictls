@@ -94,5 +94,9 @@ func (c *Conn) SetWriteDeadline(t time.Time) error {
 }
 
 func (c *Conn) Unwrap() net.Conn {
+	if c.rbuf != nil {
+		// can't unwrap yet at this point
+		return nil
+	}
 	return c.conn
 }

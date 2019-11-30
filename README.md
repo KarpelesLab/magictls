@@ -24,7 +24,7 @@ Use magictls.Listen() to create sockets.
 
 For example if you need to force all connections to be TLS and only want to use PROXY protocol detection:
 
-	socket, err := magictls.Listen("tcp", ":8080", tlsConfig)
+	socket, err := magictls.Listen("tcp", ":8443", tlsConfig)
 	if err != nil {
 		...
 	}
