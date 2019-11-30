@@ -108,7 +108,14 @@ func (r *Listener) Accept() (net.Conn, error) {
 		}
 	}
 
-	return cw, nil
+	var final net.Conn
+	final = cw
+	if cw.rbuf == nil {
+		// skip cw
+		final = cw.conn
+	}
+
+	return final, nil
 }
 
 // Close() closes the socket.

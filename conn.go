@@ -92,3 +92,7 @@ func (c *Conn) SetReadDeadline(t time.Time) error {
 func (c *Conn) SetWriteDeadline(t time.Time) error {
 	return c.conn.SetWriteDeadline(t)
 }
+
+func (c *Conn) Unwrap() net.Conn {
+	return c.conn
+}
