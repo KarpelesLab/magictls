@@ -58,7 +58,10 @@ func Listen(network, laddr string, config *tls.Config) (*Listener, error) {
 // but can be used to push connections via PushConn. This can be useful to use
 // a http.Server with custom listeners.
 func ListenNull() *Listener {
-	return &Listener{queue: make(chan queuePoint, 8)}
+	return &Listener{
+		queue:   make(chan queuePoint, 8),
+		Filters: []Filter{DetectProxy, DetectTLS},
+	}
 }
 
 // Accept blocks until a connection is available, then return said connection
