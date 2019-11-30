@@ -10,6 +10,8 @@ A simple Go library that detects protocol automatically:
 
 This library was used in some of my projects, I've cleaned it up and licensed it under the MIT License since it's small and useful. Pull requests welcome.
 
+It is written to work with protocols where the client sends the first data, and it expects the client to send at least 16 bytes. This works nicely with HTTP (`GET / HTTP/1.0\r\n` is exactly 16 bytes), SSL, etc. but may not work with protocols such as POP3, IMAP or SMTP where the server is expected to send the first bytes unless TLS is required.
+
 ## Usage
 
 Use magictls.Listen() to create sockets.

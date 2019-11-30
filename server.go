@@ -96,18 +96,23 @@ func (r *MagicListener) PushConn(c net.Conn) {
 	r.queue <- queuePoint{c: c}
 }
 
+// Accept blocks until a connection is available, then return said connection
+// or an error if the listener was closed.
 func (r *MagicListener) Accept() (net.Conn, error) {
 	// TODO implement timeouts?
 	p := <-r.queue
 	return p.c, p.e
 }
 
+// AcceptRaw blocks until a connection is available, then return said connection
+// alongside the original TCP socket, or an error if the listener was closed.
 func (r *MagicListener) AcceptRaw() (net.Conn, *net.TCPConn, error) {
 	// TODO implement timeouts?
 	p := <-r.queue
 	return p.c, p.rc, p.e
 }
 
+// Close() closes the socket.
 func (r *MagicListener) Close() error {
 	if r.port != nil {
 		if err := r.port.Close(); err != nil {
@@ -118,6 +123,8 @@ func (r *MagicListener) Close() error {
 	return nil
 }
 
+// Addr returns the address the socket is currently listening on, or nil for
+// null listeners.
 func (r *MagicListener) Addr() net.Addr {
 	return r.addr
 }
@@ -144,6 +151,8 @@ func (r *MagicListener) listenLoop() {
 				time.Sleep(tempDelay)
 				continue
 			}
+
+			// send error (TODO if more than one thread is calling Accept, only one will return)
 			r.queue <- queuePoint{e: err}
 			return
 		} else {
@@ -162,12 +171,14 @@ func (r *MagicListener) HandleConn(c *net.TCPConn) {
 		c.Close()
 		return
 	}
-	cw := new(magicTlsBuffer)
-	cw.conn = c
-	cw.rbuf = buf
-	cw.rbuflen = n
-	cw.l = c.LocalAddr()
-	cw.r = c.RemoteAddr()
+
+	cw := &magicTlsBuffer{
+		conn:    c,
+		rbuf:    buf,
+		rbuflen: n,
+		l:       c.LocalAddr(),
+		r:       c.RemoteAddr(),
+	}
 	if n < 16 {
 		// less than 16 bytes of data means we reached EOF, implying this isn't SSL or PROXY header, pass along
 		r.queue <- queuePoint{c: cw, rc: c}

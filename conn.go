@@ -10,7 +10,7 @@ import (
 )
 
 // magicTlsBuffer is used to prepend data to the data stream when we need to
-// unread what we read but can't. It can be used as a net.Conn.
+// unread what we've read. It can be used as a net.Conn.
 type magicTlsBuffer struct {
 	conn    net.Conn
 	rbuf    []byte
