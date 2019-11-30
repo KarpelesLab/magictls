@@ -39,7 +39,7 @@ func init() {
 //
 // By default all local IPs are allowed as these cannot appear on Internet.
 //
-// SetAllowedProxies([]string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fd00::/8"})
+// SetAllowedProxies([]string{"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1/128", "fd00::/8"})
 func SetAllowedProxies(cidrs []string) error {
 	allowed := []*net.IPNet{}
 
