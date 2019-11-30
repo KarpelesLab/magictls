@@ -22,3 +22,13 @@ Use magictls.Listen() to create sockets.
 	}
 	log.Fatal(http.Serve(socket, handler))
 
+For example if you need to force all connections to be TLS and only want to use PROXY protocol detection:
+
+	socket, err := magictls.Listen("tcp", ":8080", tlsConfig)
+	if err != nil {
+		...
+	}
+	socket.Filters = []magictls.Filter{magictls.DetectProxy, magictls.ForceTLS}
+	log.Fatal(http.Serve(socket, handler))
+
+It is also possible to implement your own filters.
