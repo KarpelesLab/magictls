@@ -23,3 +23,7 @@ func DetectTLS(conn *Conn, srv *MagicListener) error {
 	// probably not tls
 	return nil
 }
+
+func ForceTLS(conn *Conn, srv *MagicListener) error {
+	return &Override{tls.Server(conn, srv.TLSConfig)}
+}
