@@ -37,7 +37,7 @@ func SetAllowedProxies(cidrs []string) error {
 	return nil
 }
 
-func DetectProxy(cw *Conn, srv *MagicListener) error {
+func DetectProxy(cw *Conn, srv *Listener) error {
 	proxyAllow := false
 
 	switch ipaddr := cw.r.(type) {

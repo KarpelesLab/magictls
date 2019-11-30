@@ -2,7 +2,7 @@ package magictls
 
 import "crypto/tls"
 
-func DetectTLS(conn *Conn, srv *MagicListener) error {
+func DetectTLS(conn *Conn, srv *Listener) error {
 	buf, err := conn.PeekUntil(1)
 	if err != nil {
 		return err
@@ -24,6 +24,6 @@ func DetectTLS(conn *Conn, srv *MagicListener) error {
 	return nil
 }
 
-func ForceTLS(conn *Conn, srv *MagicListener) error {
+func ForceTLS(conn *Conn, srv *Listener) error {
 	return &Override{tls.Server(conn, srv.TLSConfig)}
 }

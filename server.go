@@ -13,10 +13,10 @@ type queuePoint struct {
 	doFlt bool
 }
 
-// MagicListener is a TCP network listener supporting TLS and
+// Listener is a TCP network listener supporting TLS and
 // PROXY protocol automatically. It assumes no matter what the used protocol
 // is, at least 16 bytes will always be initially sent (true for HTTP).
-type MagicListener struct {
+type Listener struct {
 	port      *net.TCPListener
 	addr      *net.TCPAddr
 	queue     chan queuePoint
@@ -32,8 +32,8 @@ type MagicListener struct {
 //
 // If the connection uses TLS protocol, then Accept() returned net.Conn will
 // actually be a tls.Conn object.
-func Listen(network, laddr string, config *tls.Config) (*MagicListener, error) {
-	r := new(MagicListener)
+func Listen(network, laddr string, config *tls.Config) (*Listener, error) {
+	r := new(Listener)
 	var err error
 
 	r.addr, err = net.ResolveTCPAddr(network, laddr)
@@ -57,13 +57,13 @@ func Listen(network, laddr string, config *tls.Config) (*MagicListener, error) {
 // ListenNull creates a listener that is not actually listening to anything,
 // but can be used to push connections via PushConn. This can be useful to use
 // a http.Server with custom listeners.
-func ListenNull() *MagicListener {
-	return &MagicListener{queue: make(chan queuePoint, 8)}
+func ListenNull() *Listener {
+	return &Listener{queue: make(chan queuePoint, 8)}
 }
 
 // Accept blocks until a connection is available, then return said connection
 // or an error if the listener was closed.
-func (r *MagicListener) Accept() (net.Conn, error) {
+func (r *Listener) Accept() (net.Conn, error) {
 	// TODO implement timeouts?
 	p, ok := <-r.queue
 	if !ok {
@@ -109,7 +109,7 @@ func (r *MagicListener) Accept() (net.Conn, error) {
 }
 
 // Close() closes the socket.
-func (r *MagicListener) Close() error {
+func (r *Listener) Close() error {
 	if r.port != nil {
 		if err := r.port.Close(); err != nil {
 			return err
@@ -121,11 +121,11 @@ func (r *MagicListener) Close() error {
 
 // Addr returns the address the socket is currently listening on, or nil for
 // null listeners.
-func (r *MagicListener) Addr() net.Addr {
+func (r *Listener) Addr() net.Addr {
 	return r.addr
 }
 
-func (r *MagicListener) listenLoop() {
+func (r *Listener) listenLoop() {
 	var tempDelay time.Duration // how long to sleep on accept failure
 	for {
 		c, err := r.port.AcceptTCP()
@@ -156,16 +156,16 @@ func (r *MagicListener) listenLoop() {
 
 // PushConn allows pushing an existing connection to the queue as if it had
 // just been accepted by the server. No auto-detection will be performed.
-func (r *MagicListener) PushConn(c net.Conn) {
+func (r *Listener) PushConn(c net.Conn) {
 	r.queue <- queuePoint{c: c}
 }
 
 // HandleConn will run detection on a given incoming connection and attempt to
 // find if it should parse any kind of PROXY headers, or TLS handshake/etc.
-func (r *MagicListener) HandleConn(c *net.TCPConn) {
+func (r *Listener) HandleConn(c *net.TCPConn) {
 	r.queue <- queuePoint{c: c, doFlt: true}
 }
 
-func (p *MagicListener) String() string {
+func (p *Listener) String() string {
 	return p.addr.String()
 }
