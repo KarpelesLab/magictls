@@ -8,9 +8,9 @@ import (
 )
 
 type queuePoint struct {
-	c  net.Conn
-	rc *net.TCPConn
-	e  error
+	c     net.Conn
+	e     error
+	doFlt bool
 }
 
 // MagicListener is a TCP network listener supporting TLS and
@@ -71,74 +71,22 @@ func (r *MagicListener) PushConn(c net.Conn) {
 // or an error if the listener was closed.
 func (r *MagicListener) Accept() (net.Conn, error) {
 	// TODO implement timeouts?
-	p := <-r.queue
-	return p.c, p.e
-}
-
-// AcceptRaw blocks until a connection is available, then return said connection
-// alongside the original TCP socket, or an error if the listener was closed.
-func (r *MagicListener) AcceptRaw() (net.Conn, *net.TCPConn, error) {
-	// TODO implement timeouts?
-	p := <-r.queue
-	return p.c, p.rc, p.e
-}
-
-// Close() closes the socket.
-func (r *MagicListener) Close() error {
-	if r.port != nil {
-		if err := r.port.Close(); err != nil {
-			return err
-		}
-		r.port = nil
+	p, ok := <-r.queue
+	if !ok {
+		return nil, io.EOF
 	}
-	return nil
-}
 
-// Addr returns the address the socket is currently listening on, or nil for
-// null listeners.
-func (r *MagicListener) Addr() net.Addr {
-	return r.addr
-}
-
-func (r *MagicListener) shutdown() {
-	r.Close()
-}
-
-func (r *MagicListener) listenLoop() {
-	var tempDelay time.Duration // how long to sleep on accept failure
-	for {
-		c, err := r.port.AcceptTCP()
-		if err != nil {
-			// check for temporary error
-			if ne, ok := err.(net.Error); ok && ne.Temporary() {
-				if tempDelay == 0 {
-					tempDelay = 5 * time.Millisecond
-				} else {
-					tempDelay *= 2
-				}
-				if max := 1 * time.Second; tempDelay > max {
-					tempDelay = max
-				}
-				time.Sleep(tempDelay)
-				continue
-			}
-
-			// send error (TODO if more than one thread is calling Accept, only one will return)
-			r.queue <- queuePoint{e: err}
-			return
-		} else {
-			go r.HandleConn(c)
-		}
+	if !p.doFlt {
+		return p.c, p.e
 	}
-}
+	if p.e != nil {
+		return nil, p.e
+	}
 
-// HandleConn will run detection on a given incoming connection and attempt to
-// find if it should parse any kind of PROXY headers, or TLS handshake/etc.
-func (r *MagicListener) HandleConn(c *net.TCPConn) {
 	cw := &Conn{
-		conn: c,
-		l:    c.LocalAddr(),
-		r:    c.RemoteAddr(),
+		conn: p.c,
+		l:    p.c.LocalAddr(),
+		r:    p.c.RemoteAddr(),
 	}
 
 	// for each filter
@@ -163,8 +111,59 @@ func (r *MagicListener) HandleConn(c *net.TCPConn) {
 		}
 	}
 
-	// send to serve
-	r.queue <- queuePoint{c: cw, rc: c}
+	return cw, nil
+}
+
+// Close() closes the socket.
+func (r *MagicListener) Close() error {
+	if r.port != nil {
+		if err := r.port.Close(); err != nil {
+			return err
+		}
+		r.port = nil
+	}
+	return nil
+}
+
+// Addr returns the address the socket is currently listening on, or nil for
+// null listeners.
+func (r *MagicListener) Addr() net.Addr {
+	return r.addr
+}
+
+func (r *MagicListener) listenLoop() {
+	var tempDelay time.Duration // how long to sleep on accept failure
+	for {
+		c, err := r.port.AcceptTCP()
+		if err != nil {
+			// check for temporary error
+			if ne, ok := err.(net.Error); ok && ne.Temporary() {
+				if tempDelay == 0 {
+					tempDelay = 5 * time.Millisecond
+				} else {
+					tempDelay *= 2
+				}
+				if max := 1 * time.Second; tempDelay > max {
+					tempDelay = max
+				}
+				time.Sleep(tempDelay)
+				continue
+			}
+
+			// send error & close
+			r.queue <- queuePoint{e: err}
+			close(r.queue)
+			return
+		} else {
+			go r.HandleConn(c)
+		}
+	}
+}
+
+// HandleConn will run detection on a given incoming connection and attempt to
+// find if it should parse any kind of PROXY headers, or TLS handshake/etc.
+func (r *MagicListener) HandleConn(c *net.TCPConn) {
+	r.queue <- queuePoint{c: c, doFlt: true}
 }
 
 func (p *MagicListener) String() string {
