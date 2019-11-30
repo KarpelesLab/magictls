@@ -9,60 +9,95 @@ import (
 	"time"
 )
 
-// magicTlsBuffer is used to prepend data to the data stream when we need to
+// Conn is used to prepend data to the data stream when we need to
 // unread what we've read. It can be used as a net.Conn.
-type magicTlsBuffer struct {
-	conn    net.Conn
-	rbuf    []byte
-	rbuflen int
-	l, r    net.Addr
+type Conn struct {
+	conn net.Conn
+	rbuf []byte
+	l, r net.Addr
 }
 
-func (c *magicTlsBuffer) Read(b []byte) (int, error) {
-	if c.rbuflen > 0 {
-		if len(b) >= c.rbuflen {
+func (c *Conn) Read(b []byte) (int, error) {
+	if ln := len(c.rbuf); ln > 0 {
+		if len(b) >= ln {
 			n := copy(b, c.rbuf)
-			c.rbuflen = 0
+			c.rbuf = nil
 			return n, nil
 		}
-		// last case, rbuflen < b
+		// rbuf did not fit, return as much as we can and keep the rest
 		n := copy(b, c.rbuf)
-		c.rbuflen -= n
 		c.rbuf = c.rbuf[n:]
 		return n, nil
 	}
 	return c.conn.Read(b)
 }
 
-func (c *magicTlsBuffer) Write(b []byte) (int, error) {
+// PeekMore will perform a single read from the socket, and return the data
+// read so far. May return an error if the socket was closed (in which case
+// data may still be returned if it was read before).
+func (c *Conn) PeekMore(count int) ([]byte, error) {
+	buf := make([]byte, count)
+	n, err := c.conn.Read(buf)
+	if err != nil {
+		return c.rbuf, err
+	}
+
+	buf = buf[:n] // cut buf
+	c.rbuf = append(c.rbuf, buf...)
+	return c.rbuf, nil
+}
+
+// PeekUntil will block until at least count bytes were read, or an error
+// happens.
+func (c *Conn) PeekUntil(count int) ([]byte, error) {
+	for len(c.rbuf) < count {
+		_, err := c.PeekMore(count - len(c.rbuf))
+		if err != nil {
+			return c.rbuf, err
+		}
+	}
+
+	return c.rbuf, nil
+}
+
+func (c *Conn) SkipPeek(count int) {
+	// skip X bytes from previous peeks
+	if len(c.rbuf) <= count {
+		c.rbuf = nil
+	} else {
+		c.rbuf = c.rbuf[count:]
+	}
+}
+
+func (c *Conn) Write(b []byte) (int, error) {
 	return c.conn.Write(b)
 }
 
-func (c *magicTlsBuffer) Close() error {
+func (c *Conn) Close() error {
 	return c.conn.Close()
 }
 
-func (c *magicTlsBuffer) LocalAddr() net.Addr {
+func (c *Conn) LocalAddr() net.Addr {
 	return c.l
 }
 
-func (c *magicTlsBuffer) RemoteAddr() net.Addr {
+func (c *Conn) RemoteAddr() net.Addr {
 	return c.r
 }
 
-func (c *magicTlsBuffer) SetDeadline(t time.Time) error {
+func (c *Conn) SetDeadline(t time.Time) error {
 	return c.conn.SetDeadline(t)
 }
 
-func (c *magicTlsBuffer) SetReadDeadline(t time.Time) error {
+func (c *Conn) SetReadDeadline(t time.Time) error {
 	return c.conn.SetReadDeadline(t)
 }
 
-func (c *magicTlsBuffer) SetWriteDeadline(t time.Time) error {
+func (c *Conn) SetWriteDeadline(t time.Time) error {
 	return c.conn.SetWriteDeadline(t)
 }
 
-func (c *magicTlsBuffer) parseProxyLine(buf []byte) error {
+func (c *Conn) parseProxyLine(buf []byte) error {
 	s := bytes.Split(buf, []byte{' '})
 	if bytes.Compare(s[0], []byte("PROXY")) != 0 {
 		return errors.New("magictls: invalid proxy line provided")
@@ -86,7 +121,7 @@ func (c *magicTlsBuffer) parseProxyLine(buf []byte) error {
 	}
 }
 
-func (c *magicTlsBuffer) parseProxyV2Data(verCmd, fam uint8, d []byte) error {
+func (c *Conn) parseProxyV2Data(verCmd, fam uint8, d []byte) error {
 	if verCmd>>4&0xf != 0x2 {
 		return errors.New("magictls: unsupported PROXYv2 header version")
 	}
