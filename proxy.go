@@ -3,7 +3,7 @@ package magictls
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
+	"fmt"
 	"log"
 	"net"
 	"strconv"
@@ -13,6 +13,15 @@ var allowedProxyIps []*net.IPNet
 
 func init() {
 	SetAllowedProxies([]string{"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1/128", "fd00::/8"})
+}
+
+type proxyError struct {
+	version int
+	msg     string
+}
+
+func (p *proxyError) Error() string {
+	return fmt.Sprintf("Error in PROXYv%d protocol: %s", p.version, p.msg)
 }
 
 // SetAllowedProxies allows modifying the list of IP addresses allowed to use
@@ -113,8 +122,7 @@ func DetectProxy(cw *Conn, srv *Listener) error {
 
 		err := parseProxyLine(cw, buf[:pos])
 		if err != nil {
-			log.Printf("magictls: failed to parse PROXY line (%s): %s\n", buf[:pos], err)
-			return nil
+			return err
 		}
 
 		cw.SkipPeek(pos + 1)
@@ -125,7 +133,7 @@ func DetectProxy(cw *Conn, srv *Listener) error {
 func parseProxyLine(c *Conn, buf []byte) error {
 	s := bytes.Split(buf, []byte{' '})
 	if bytes.Compare(s[0], []byte("PROXY")) != 0 {
-		return errors.New("magictls: invalid proxy line provided")
+		return &proxyError{version: 1, msg: "invalid proxy line provided"}
 	}
 
 	// see: magictls://www.haproxy.org/download/1.5/doc/proxy-protocol.txt
@@ -134,7 +142,7 @@ func parseProxyLine(c *Conn, buf []byte) error {
 		return nil // do nothing
 	case "TCP4", "TCP6":
 		if len(s) < 6 {
-			return errors.New("magictls: not enough parameters for TCP PROXY")
+			return &proxyError{version: 1, msg: "not enough parameters for TCP PROXY"}
 		}
 		rPort, _ := strconv.Atoi(string(s[4]))
 		lPort, _ := strconv.Atoi(string(s[5]))
@@ -142,13 +150,13 @@ func parseProxyLine(c *Conn, buf []byte) error {
 		c.l = &net.TCPAddr{IP: net.ParseIP(string(s[3])), Port: lPort}
 		return nil
 	default:
-		return errors.New("magictls: invalid proxy transport provided")
+		return &proxyError{version: 1, msg: "invalid proxy transport provided"}
 	}
 }
 
 func parseProxyV2Data(c *Conn, verCmd, fam uint8, d []byte) error {
 	if verCmd>>4&0xf != 0x2 {
-		return errors.New("magictls: unsupported PROXYv2 header version")
+		return &proxyError{version: 2, msg: "uynsupported header version"}
 	}
 	switch verCmd & 0xf {
 	case 0x0: // LOCAL (health check, etc)
@@ -156,7 +164,7 @@ func parseProxyV2Data(c *Conn, verCmd, fam uint8, d []byte) error {
 	case 0x1: // PROXY
 		break
 	default:
-		return errors.New("magictls: unsupported proxy type data")
+		return &proxyError{version: 2, msg: "unsupported proxy type"}
 	}
 
 	switch fam >> 4 & 0xf {
@@ -167,7 +175,7 @@ func parseProxyV2Data(c *Conn, verCmd, fam uint8, d []byte) error {
 	case 0x3: // AF_UNIX
 		return nil
 	default:
-		return errors.New("magictls: unsupported proxy address family")
+		return &proxyError{version: 2, msg: "unsupported address family"}
 	}
 
 	switch fam & 0xf {
@@ -176,7 +184,7 @@ func parseProxyV2Data(c *Conn, verCmd, fam uint8, d []byte) error {
 	case 0x1, 0x2: // STREAM, DGRAM
 		break
 	default:
-		return errors.New("magictls: unsupported proxy protocol")
+		return &proxyError{version: 2, msg: "unsupported protocol"}
 	}
 
 	// sanitarization done, let's parse data
@@ -186,7 +194,7 @@ func parseProxyV2Data(c *Conn, verCmd, fam uint8, d []byte) error {
 	switch fam >> 4 & 0xf {
 	case 0x1: // AF_INET
 		if len(d) < 12 {
-			return errors.New("magictls: not enough data in proxy v2 header for ipv4")
+			return &proxyError{version: 2, msg: "not enough data for ipv4"}
 		}
 		rip := make([]byte, 4)
 		lip := make([]byte, 4)
@@ -199,7 +207,7 @@ func parseProxyV2Data(c *Conn, verCmd, fam uint8, d []byte) error {
 		c.l = &net.TCPAddr{IP: lip, Port: int(lPort)}
 	case 0x2: // AF_INET6
 		if len(d) < 36 {
-			return errors.New("magictls: not enough data in proxy v2 header for ipv6")
+			return &proxyError{version: 2, msg: "not enough data for ipv6"}
 		}
 		rip := make([]byte, 16)
 		lip := make([]byte, 16)

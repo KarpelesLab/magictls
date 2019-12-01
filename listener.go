@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+var ErrDuplicateProtocol = errors.New("protocol already has a listener")
+
 type queuePoint struct {
 	c     net.Conn
 	e     error
@@ -83,7 +85,7 @@ func (r *Listener) ProtoListener(proto ...string) (net.Listener, error) {
 	// check if none of proto are taken
 	for _, pr := range proto {
 		if _, found := r.proto[pr]; found {
-			return nil, errors.New("protocol already has a listener")
+			return nil, ErrDuplicateProtocol
 		}
 	}
 
