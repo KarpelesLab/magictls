@@ -37,6 +37,9 @@ func SetAllowedProxies(cidrs []string) error {
 	return nil
 }
 
+// DetectProxy is a magictls filter that will detect proxy protocol headers
+// (both versions) and update local/remote addr based on these if the
+// source is an allowed proxy (see SetAllowedProxies).
 func DetectProxy(cw *Conn, srv *Listener) error {
 	proxyAllow := false
 

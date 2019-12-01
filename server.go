@@ -126,6 +126,7 @@ func (r *Listener) Accept() (net.Conn, error) {
 		}
 
 		var tlsconn *tls.Conn
+		filterError := false
 
 		// for each filter
 		for _, f := range r.Filters {
@@ -150,7 +151,15 @@ func (r *Listener) Accept() (net.Conn, error) {
 				}
 
 				// For now we ignore all filter errors
+				log.Printf("filter error on new connection: %s", err)
+				c.Close()
+				filterError = true
+				break
 			}
+		}
+		if filterError {
+			// wait for another connection
+			continue
 		}
 
 		final = cw

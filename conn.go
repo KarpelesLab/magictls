@@ -56,6 +56,8 @@ func (c *Conn) PeekUntil(count int) ([]byte, error) {
 	return c.rbuf, nil
 }
 
+// SkipPeek will skip count bytes from the peek buffer, or strip the whole
+// buffer if count is larger or equal to the buffer.
 func (c *Conn) SkipPeek(count int) {
 	// skip X bytes from previous peeks
 	if len(c.rbuf) <= count {
