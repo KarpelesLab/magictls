@@ -72,12 +72,10 @@ func DetectProxy(cw *Conn, srv *Listener) error {
 	// detect proxy
 	if bytes.Compare(buf[:12], []byte{0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0x0d, 0x0a, 0x51, 0x55, 0x49, 0x54, 0x0a}) == 0 {
 		// proxy protocol v2
-		b := bytes.NewBuffer(buf[12:])
 		var verCmd, fam uint8
-		var ln uint16
-		binary.Read(b, binary.BigEndian, &verCmd)
-		binary.Read(b, binary.BigEndian, &fam)
-		binary.Read(b, binary.BigEndian, &ln)
+		verCmd = buf[12]
+		fam = buf[13]
+		ln := binary.BigEndian.Uint16(buf[14:16])
 		var d []byte
 		if ln > 0 {
 			tmp, err := cw.PeekUntil(16 + int(ln))
@@ -87,7 +85,11 @@ func DetectProxy(cw *Conn, srv *Listener) error {
 			}
 			d = tmp[16:]
 		}
-		return parseProxyV2Data(cw, verCmd, fam, d)
+		if err := parseProxyV2Data(cw, verCmd, fam, d); err != nil {
+			return err
+		}
+		cw.SkipPeek(16 + int(ln))
+		return nil
 	} else if bytes.Compare(buf[:6], []byte("PROXY ")) == 0 {
 		// proxy protocol v1
 		var pos int
@@ -112,7 +114,7 @@ func DetectProxy(cw *Conn, srv *Listener) error {
 		err := parseProxyLine(cw, buf[:pos])
 		if err != nil {
 			log.Printf("magictls: failed to parse PROXY line (%s): %s\n", buf[:pos], err)
-			return err
+			return nil
 		}
 
 		cw.SkipPeek(pos + 1)
@@ -190,8 +192,8 @@ func parseProxyV2Data(c *Conn, verCmd, fam uint8, d []byte) error {
 		lip := make([]byte, 4)
 		binary.Read(b, binary.BigEndian, rip)
 		binary.Read(b, binary.BigEndian, lip)
-		binary.Read(b, binary.BigEndian, &lPort)
 		binary.Read(b, binary.BigEndian, &rPort)
+		binary.Read(b, binary.BigEndian, &lPort)
 
 		c.r = &net.TCPAddr{IP: rip, Port: int(rPort)}
 		c.l = &net.TCPAddr{IP: lip, Port: int(lPort)}
@@ -203,8 +205,8 @@ func parseProxyV2Data(c *Conn, verCmd, fam uint8, d []byte) error {
 		lip := make([]byte, 16)
 		binary.Read(b, binary.BigEndian, rip)
 		binary.Read(b, binary.BigEndian, lip)
-		binary.Read(b, binary.BigEndian, &lPort)
 		binary.Read(b, binary.BigEndian, &rPort)
+		binary.Read(b, binary.BigEndian, &lPort)
 
 		c.r = &net.TCPAddr{IP: rip, Port: int(rPort)}
 		c.l = &net.TCPAddr{IP: lip, Port: int(lPort)}

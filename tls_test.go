@@ -115,6 +115,33 @@ func TestTLS(t *testing.T) {
 		t.Errorf("invalid response: %s", buf)
 		return
 	}
+
+	// test with "B" and proxyv2 protocol
+	ctcp, err = net.Dial("tcp", fmt.Sprintf("localhost:%d", port))
+	if err != nil {
+		t.Errorf("failed connect: %s", err)
+		return
+	}
+
+	// send proxyv2 prefix
+	ctcp.Write([]byte{0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0x0d, 0x0a, 0x51, 0x55, 0x49, 0x54, 0x0a})
+	// send proxyv2 info
+	ctcp.Write([]byte{0x21, 0x11, 0, 12, 10, 0, 0, 1, 10, 0, 0, 2, 0, 123, 1, 200})
+
+	// initialize tls
+	c = tls.Client(ctcp, &tls.Config{RootCAs: testP, ServerName: "localhost", NextProtos: []string{"b"}})
+
+	buf, err = ioutil.ReadAll(c)
+	c.Close()
+	if err != nil {
+		t.Errorf("failed read: %s", err)
+		return
+	}
+
+	if string(buf) != "IP = 10.0.0.1:123" {
+		t.Errorf("invalid response: %s", buf)
+		return
+	}
 }
 
 func testSrv(rdy chan int) {
