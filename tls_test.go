@@ -90,6 +90,31 @@ func TestTLS(t *testing.T) {
 		t.Errorf("invalid response: %s", buf)
 		return
 	}
+
+	// test with "B" and proxy protocol
+	ctcp, err := net.Dial("tcp", fmt.Sprintf("localhost:%d", port))
+	if err != nil {
+		t.Errorf("failed connect: %s", err)
+		return
+	}
+
+	// send proxy line
+	fmt.Fprintf(ctcp, "PROXY TCP4 10.0.0.1 10.0.0.2 123 456\r\n")
+
+	// initialize tls
+	c = tls.Client(ctcp, &tls.Config{RootCAs: testP, ServerName: "localhost", NextProtos: []string{"b"}})
+
+	buf, err = ioutil.ReadAll(c)
+	c.Close()
+	if err != nil {
+		t.Errorf("failed read: %s", err)
+		return
+	}
+
+	if string(buf) != "IP = 10.0.0.1:123" {
+		t.Errorf("invalid response: %s", buf)
+		return
+	}
 }
 
 func testSrv(rdy chan int) {
@@ -117,6 +142,9 @@ func testSrv(rdy chan int) {
 	if sub, err := l.ProtoListener("a"); err == nil {
 		go handleA(sub)
 	}
+	if sub, err := l.ProtoListener("b"); err == nil {
+		go handleB(sub)
+	}
 
 	// read loop (default handler)
 	for {
@@ -140,6 +168,19 @@ func handleA(l net.Listener) {
 		}
 
 		fmt.Fprintf(c, "hello from A")
+		c.Close()
+	}
+}
+
+func handleB(l net.Listener) {
+	for {
+		c, err := l.Accept()
+		if err != nil {
+			log.Printf("accept error: %s", err)
+			return
+		}
+
+		fmt.Fprintf(c, "IP = %s", c.RemoteAddr())
 		c.Close()
 	}
 }
