@@ -2,8 +2,10 @@ package magictls
 
 import (
 	"crypto/tls"
+	"errors"
 	"io"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -17,12 +19,14 @@ type queuePoint struct {
 // PROXY protocol automatically. It assumes no matter what the used protocol
 // is, at least 16 bytes will always be initially sent (true for HTTP).
 type Listener struct {
-	port      *net.TCPListener
-	addr      *net.TCPAddr
-	queue     chan queuePoint
-	TLSConfig *tls.Config
+	port    *net.TCPListener
+	addr    *net.TCPAddr
+	queue   chan queuePoint
+	proto   map[string]*protoListener
+	protoLk sync.RWMutex
 
-	Filters []Filter
+	TLSConfig *tls.Config
+	Filters   []Filter
 }
 
 // Listen creates a hybrid TCP/TLS listener accepting connections on the given
@@ -33,7 +37,9 @@ type Listener struct {
 // If the connection uses TLS protocol, then Accept() returned net.Conn will
 // actually be a tls.Conn object.
 func Listen(network, laddr string, config *tls.Config) (*Listener, error) {
-	r := new(Listener)
+	r := &Listener{
+		proto: make(map[string]*protoListener),
+	}
 	var err error
 
 	r.addr, err = net.ResolveTCPAddr(network, laddr)
@@ -60,62 +66,119 @@ func Listen(network, laddr string, config *tls.Config) (*Listener, error) {
 func ListenNull() *Listener {
 	return &Listener{
 		queue:   make(chan queuePoint, 8),
+		proto:   make(map[string]*protoListener),
 		Filters: []Filter{DetectProxy, DetectTLS},
 	}
+}
+
+// ProtoListener returns a net.Listener that will receive connections for which
+// TLS is enabled and the specified protocol(s) have been negociated between
+// client and server.
+func (r *Listener) ProtoListener(proto ...string) (net.Listener, error) {
+	r.protoLk.Lock()
+	defer r.protoLk.Unlock()
+
+	// check if none of proto are taken
+	for _, pr := range proto {
+		if _, found := r.proto[pr]; found {
+			return nil, errors.New("protocol already has a listener")
+		}
+	}
+
+	// create listener, register
+	l := &protoListener{
+		proto:  proto,
+		queue:  make(chan *queuePoint, 8),
+		parent: r,
+	}
+
+	for _, pr := range proto {
+		r.proto[pr] = l
+	}
+
+	return l, nil
 }
 
 // Accept blocks until a connection is available, then return said connection
 // or an error if the listener was closed.
 func (r *Listener) Accept() (net.Conn, error) {
-	// TODO implement timeouts?
-	p, ok := <-r.queue
-	if !ok {
-		return nil, io.EOF
-	}
-
-	if !p.doFlt {
-		return p.c, p.e
-	}
-	if p.e != nil {
-		return nil, p.e
-	}
-
-	cw := &Conn{
-		conn: p.c,
-		l:    p.c.LocalAddr(),
-		r:    p.c.RemoteAddr(),
-	}
-
-	// for each filter
-	for _, f := range r.Filters {
-		err := f(cw, r)
-		if err != nil {
-			if err == io.EOF {
-				// ignore EOF errors, those are typically not important
-				continue
-			}
-			if ov, ok := err.(*Override); ok {
-				// perform override
-				cw = &Conn{
-					conn: ov.Conn,
-					l:    ov.Conn.LocalAddr(),
-					r:    ov.Conn.RemoteAddr(),
-				}
-				continue
-			}
-
-			// For now we ignore all filter errors
-		}
-	}
-
 	var final net.Conn
-	final = cw
-	if cw.rbuf == nil {
-		// skip cw
-		final = cw.conn
-	}
 
-	return final, nil
+	for {
+		// TODO implement timeouts?
+		p, ok := <-r.queue
+		if !ok {
+			return nil, io.EOF
+		}
+
+		if !p.doFlt {
+			return p.c, p.e
+		}
+		if p.e != nil {
+			return nil, p.e
+		}
+
+		cw := &Conn{
+			conn: p.c,
+			l:    p.c.LocalAddr(),
+			r:    p.c.RemoteAddr(),
+		}
+
+		var tlsconn *tls.Conn
+
+		// for each filter
+		for _, f := range r.Filters {
+			err := f(cw, r)
+			if err != nil {
+				if err == io.EOF {
+					// ignore EOF errors, those are typically not important
+					continue
+				}
+				if ov, ok := err.(*Override); ok {
+					if t, ok := ov.Conn.(*tls.Conn); ok {
+						// keep this tls connection nearby
+						tlsconn = t
+					}
+					// perform override
+					cw = &Conn{
+						conn: ov.Conn,
+						l:    ov.Conn.LocalAddr(),
+						r:    ov.Conn.RemoteAddr(),
+					}
+					continue
+				}
+
+				// For now we ignore all filter errors
+			}
+		}
+
+		final = cw
+		if cw.rbuf == nil {
+			// skip cw
+			final = cw.conn
+		}
+
+		if tlsconn != nil {
+			// special case: this is a tls socket. Check NegotiatedProtocol
+			np := tlsconn.ConnectionState().NegotiatedProtocol
+
+			if np != "" {
+				// grab lock
+				r.protoLk.RLock()
+				v, ok := r.proto[np]
+				if !ok {
+					r.protoLk.RUnlock()
+					return final, nil
+				}
+
+				// send value
+				v.queue <- &queuePoint{c: final, e: nil}
+				r.protoLk.RUnlock()
+				continue // resume loop
+			}
+		}
+		return final, nil
+	}
 }
 
 // Close() closes the socket.

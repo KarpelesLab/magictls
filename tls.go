@@ -12,11 +12,21 @@ func DetectTLS(conn *Conn, srv *Listener) error {
 	if buf[0]&0x80 == 0x80 {
 		// SSLv2, probably. At least, not HTTP
 		cs := tls.Server(conn, srv.TLSConfig)
+		if err = cs.Handshake(); err != nil {
+			// note: at this point we lost data, connection should be closed
+			conn.Close()
+			return err
+		}
 		return &Override{cs}
 	}
 	if buf[0] == 0x16 {
 		// SSLv3, TLS
 		cs := tls.Server(conn, srv.TLSConfig)
+		if err = cs.Handshake(); err != nil {
+			// note: at this point we lost data, connection should be closed
+			conn.Close()
+			return err
+		}
 		return &Override{cs}
 	}
 
@@ -25,5 +35,9 @@ func DetectTLS(conn *Conn, srv *Listener) error {
 }
 
 func ForceTLS(conn *Conn, srv *Listener) error {
-	return &Override{tls.Server(conn, srv.TLSConfig)}
+	cs := tls.Server(conn, srv.TLSConfig)
+	if err := cs.Handshake(); err != nil {
+		return err
+	}
+	return &Override{cs}
 }
