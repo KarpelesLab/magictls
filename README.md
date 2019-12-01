@@ -14,7 +14,7 @@ It is written to work with protocols where the client sends the first data, and 
 
 ## Usage
 
-Use magictls.Listen() to create sockets.
+Use `magictls.Listen()` to create sockets the same way you would use `tls.Listen()`.
 
 	socket, err := magictls.Listen("tcp", ":8080", tlsConfig)
 	if err != nil {
@@ -22,7 +22,7 @@ Use magictls.Listen() to create sockets.
 	}
 	log.Fatal(http.Serve(socket, handler))
 
-For example if you need to force all connections to be TLS and only want to use PROXY protocol detection:
+The created listener can receive various configurations. For example if you need to force all connections to be TLS and only want to use PROXY protocol detection:
 
 	socket, err := magictls.Listen("tcp", ":8443", tlsConfig)
 	if err != nil {
