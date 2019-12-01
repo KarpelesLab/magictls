@@ -20,7 +20,7 @@ type queuePoint struct {
 // is, at least 16 bytes will always be initially sent (true for HTTP).
 type Listener struct {
 	port    *net.TCPListener
-	addr    *net.TCPAddr
+	addr    net.Addr
 	queue   chan queuePoint
 	proto   map[string]*protoListener
 	protoLk sync.RWMutex
@@ -40,17 +40,18 @@ func Listen(network, laddr string, config *tls.Config) (*Listener, error) {
 	r := &Listener{
 		proto: make(map[string]*protoListener),
 	}
-	var err error
 
-	r.addr, err = net.ResolveTCPAddr(network, laddr)
+	addr, err := net.ResolveTCPAddr(network, laddr)
 	if err != nil {
 		return nil, err
 	}
 
-	r.port, err = net.ListenTCP(network, r.addr)
+	r.port, err = net.ListenTCP(network, addr)
 	if err != nil {
 		return nil, err
 	}
+
+	r.addr = r.port.Addr()
 	r.queue = make(chan queuePoint, 8)
 	r.TLSConfig = config
 	r.Filters = []Filter{DetectProxy, DetectTLS}
