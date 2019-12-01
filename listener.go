@@ -246,7 +246,7 @@ func (r *Listener) PushConn(c net.Conn) {
 
 // HandleConn will run detection on a given incoming connection and attempt to
 // find if it should parse any kind of PROXY headers, or TLS handshake/etc.
-func (r *Listener) HandleConn(c *net.TCPConn) {
+func (r *Listener) HandleConn(c net.Conn) {
 	r.queue <- queuePoint{c: c, doFlt: true}
 }
 

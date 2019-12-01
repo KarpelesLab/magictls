@@ -52,7 +52,7 @@ func TestTLS(t *testing.T) {
 	go testSrv(rdy)
 	port := <-rdy
 
-	log.Printf("running tests on port %d", port)
+	t.Logf("running tests on port %d", port)
 
 	c, err := tls.Dial("tcp", fmt.Sprintf("localhost:%d", port), &tls.Config{RootCAs: testP})
 	if err != nil {
