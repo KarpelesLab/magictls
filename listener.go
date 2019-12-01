@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"sync"
 	"time"
@@ -152,7 +153,7 @@ func (r *Listener) Accept() (net.Conn, error) {
 
 				// For now we ignore all filter errors
 				log.Printf("filter error on new connection: %s", err)
-				c.Close()
+				cw.Close()
 				filterError = true
 				break
 			}
