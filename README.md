@@ -1,7 +1,7 @@
 # MagicTLS
 
-[![Build Status](https://github.com/MagicalTux/magictls/workflows/Go/badge.svg)](https://github.com/MagicalTux/magictls/actions)
-[![GoDoc](https://godoc.org/github.com/MagicalTux/magictls?status.svg)](https://godoc.org/github.com/MagicalTux/magictls)
+[![Build Status](https://github.com/KarpelesLab/magictls/workflows/Go/badge.svg)](https://github.com/KarpelesLab/magictls/actions)
+[![GoDoc](https://godoc.org/github.com/KarpelesLab/magictls?status.svg)](https://godoc.org/github.com/KarpelesLab/magictls)
 
 A simple Go library that detects protocol automatically:
 
