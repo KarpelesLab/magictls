@@ -37,8 +37,8 @@ This can be used with [autocert](https://godoc.org/golang.org/x/crypto/acme/auto
 
 	m := &autocert.Manager{
 		Prompt: autocert.AcceptTOS,
-		HostPolicy: HostWhitelist("domain", "domain2"),
-		Cache: DirCache("/tmp"), // use os.UserCacheDir() to find where to put that
+		HostPolicy: autocert.HostWhitelist("domain", "domain2"),
+		Cache: autocert.DirCache("/tmp"), // use os.UserCacheDir() to find where to put that
 	}
 	cfg := m.TLSConfig()
 	// you may want to add to cfg.NextProtos any protocol you want to handle with ProtoListener. Be careful to not overwrite it.
