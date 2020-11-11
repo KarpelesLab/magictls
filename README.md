@@ -32,3 +32,15 @@ The created listener can receive various configurations. For example if you need
 	log.Fatal(http.Serve(socket, handler))
 
 It is also possible to implement your own filters.
+
+This can be used with [autocert](https://godoc.org/golang.org/x/crypto/acme/autocert) too:
+
+	m := &autocert.Manager{
+		Prompt: autocert.AcceptTOS,
+		HostPolicy: HostWhitelist("domain", "domain2"),
+		Cache: DirCache("/tmp"), // use os.UserCacheDir() to find where to put that
+	}
+	cfg := m.TLSConfig()
+	// you may want to add to cfg.NextProtos any protocol you want to handle with ProtoListener. Be careful to not overwrite it.
+	socket, err := magictls.Listen("tcp", ":8443", cfg)
+	...
