@@ -13,9 +13,8 @@ import (
 var ErrDuplicateProtocol = errors.New("protocol already has a listener")
 
 type queuePoint struct {
-	c     net.Conn
-	e     error
-	doFlt bool
+	c net.Conn
+	e error
 }
 
 // Listener is a TCP network listener supporting TLS and
@@ -30,6 +29,13 @@ type Listener struct {
 
 	TLSConfig *tls.Config
 	Filters   []Filter
+	*log.Logger
+
+	// threads
+	thCnt     uint32
+	thMax     uint32
+	thCntLock sync.RWMutex
+	thCntCond sync.Cond
 }
 
 // Listen creates a hybrid TCP/TLS listener accepting connections on the given
@@ -58,6 +64,7 @@ func Listen(network, laddr string, config *tls.Config) (*Listener, error) {
 	r.queue = make(chan queuePoint, 8)
 	r.TLSConfig = config
 	r.Filters = []Filter{DetectProxy, DetectTLS}
+	r.thMax = 64
 
 	// listenloop will accept connections then push them to the queue
 	go r.listenLoop()
@@ -103,95 +110,113 @@ func (r *Listener) ProtoListener(proto ...string) (net.Listener, error) {
 	return l, nil
 }
 
+// SetThreads sets the number of threads (goroutines) magictls will spawn in
+// parallel when handling incoming connections. Note that once a connection
+// leaves Accept() it is not tracked anymore.
+// Filters will however run in parallel for those connections, meaning that
+// one connection's handshake taking time will not block other connections.
+func (r *Listener) SetThreads(count uint32) {
+	r.thCntLock.Lock()
+	defer r.thCntLock.Unlock()
+
+	r.thMax = count
+}
+
+// GetRunningThreads returns the current number of running threads.
+func (r *Listener) GetRunningThreads() uint32 {
+	r.thCntLock.RLock()
+	defer r.thCntLock.RUnlock()
+
+	return r.thCnt
+}
+
 // Accept blocks until a connection is available, then return said connection
 // or an error if the listener was closed.
 func (r *Listener) Accept() (net.Conn, error) {
-	var final net.Conn
-
-	for {
-		// TODO implement timeouts?
-		p, ok := <-r.queue
-		if !ok {
-			return nil, io.EOF
-		}
-
-		if !p.doFlt {
-			return p.c, p.e
-		}
-		if p.e != nil {
-			return nil, p.e
-		}
-
-		cw := &Conn{
-			conn: p.c,
-			l:    p.c.LocalAddr(),
-			r:    p.c.RemoteAddr(),
-		}
-
-		var tlsconn *tls.Conn
-		filterError := false
-
-		// for each filter
-		for _, f := range r.Filters {
-			err := f(cw, r)
-			if err != nil {
-				if err == io.EOF {
-					// ignore EOF errors, those are typically not important
-					continue
-				}
-				if ov, ok := err.(*Override); ok {
-					if t, ok := ov.Conn.(*tls.Conn); ok {
-						// keep this tls connection nearby
-						tlsconn = t
-					}
-					// perform override
-					cw = &Conn{
-						conn: ov.Conn,
-						l:    ov.Conn.LocalAddr(),
-						r:    ov.Conn.RemoteAddr(),
-					}
-					continue
-				}
-
-				// For now we ignore all filter errors
-				log.Printf("filter error on new connection: %s", err)
-				cw.Close()
-				filterError = true
-				break
-			}
-		}
-		if filterError {
-			// wait for another connection
-			continue
-		}
-
-		final = cw
-		if cw.rbuf == nil {
-			// skip cw
-			final = cw.conn
-		}
-
-		if tlsconn != nil {
-			// special case: this is a tls socket. Check NegotiatedProtocol
-			np := tlsconn.ConnectionState().NegotiatedProtocol
-
-			if np != "" {
-				// grab lock
-				r.protoLk.RLock()
-				v, ok := r.proto[np]
-				if !ok {
-					r.protoLk.RUnlock()
-					return final, nil
-				}
-
-				// send value
-				v.queue <- &queuePoint{c: final, e: nil}
-				r.protoLk.RUnlock()
-				continue // resume loop
-			}
-		}
-		return final, nil
+	// TODO implement timeouts?
+	p, ok := <-r.queue
+	if !ok {
+		return nil, io.EOF
 	}
+
+	return p.c, p.e
+}
+
+// processFilters is run in a thread and will execute filters as needed.
+func (r *Listener) processFilters(c net.Conn) {
+	defer func() {
+		r.thCntLock.Lock()
+		r.thCnt -= 1
+		r.thCntLock.Unlock()
+	}()
+
+	cw := &Conn{
+		conn: c,
+		l:    c.LocalAddr(),
+		r:    c.RemoteAddr(),
+	}
+
+	var tlsconn *tls.Conn
+
+	// for each filter
+	for _, f := range r.Filters {
+		err := f(cw, r)
+		if err != nil {
+			if err == io.EOF {
+				// ignore EOF errors, those are typically not important
+				continue
+			}
+			if ov, ok := err.(*Override); ok {
+				if t, ok := ov.Conn.(*tls.Conn); ok {
+					// keep this tls connection nearby
+					tlsconn = t
+				}
+				// perform override
+				cw = &Conn{
+					conn: ov.Conn,
+					l:    ov.Conn.LocalAddr(),
+					r:    ov.Conn.RemoteAddr(),
+				}
+				continue
+			}
+
+			// For now we ignore all filter errors
+			if r.Logger != nil {
+				r.Logger.Printf("filter error on new connection: %s", err)
+			}
+			cw.Close()
+			return
+		}
+	}
+
+	var final net.Conn
+	final = cw
+	if cw.rbuf == nil {
+		// skip cw
+		final = cw.conn
+	}
+
+	if tlsconn != nil {
+		// special case: this is a tls socket. Check NegotiatedProtocol
+		np := tlsconn.ConnectionState().NegotiatedProtocol
+
+		if np != "" {
+			// grab lock
+			r.protoLk.RLock()
+			v, ok := r.proto[np]
+			if !ok {
+				r.protoLk.RUnlock()
+				r.queue <- queuePoint{c: final}
+				return
+			}
+
+			// send value
+			v.queue <- &queuePoint{c: final, e: nil}
+			r.protoLk.RUnlock()
+			return
+		}
+	}
+	r.queue <- queuePoint{c: final}
 }
 
 // Close() closes the socket.
@@ -239,7 +264,7 @@ func (r *Listener) listenLoop() {
 			c.SetKeepAlive(true)
 			c.SetKeepAlivePeriod(3 * time.Minute)
 
-			go r.HandleConn(c)
+			r.HandleConn(c)
 		}
 	}
 }
@@ -253,7 +278,17 @@ func (r *Listener) PushConn(c net.Conn) {
 // HandleConn will run detection on a given incoming connection and attempt to
 // find if it should parse any kind of PROXY headers, or TLS handshake/etc.
 func (r *Listener) HandleConn(c net.Conn) {
-	r.queue <- queuePoint{c: c, doFlt: true}
+	r.thCntLock.Lock()
+	if r.thCnt >= r.thMax {
+		// out of luck
+		r.thCntLock.Unlock()
+		c.Close()
+		return
+	}
+	r.thCnt += 1
+	r.thCntLock.Unlock()
+
+	go r.processFilters(c)
 }
 
 func (p *Listener) String() string {

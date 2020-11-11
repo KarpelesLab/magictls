@@ -46,9 +46,3 @@ func ForceTLS(conn *Conn, srv *Listener) error {
 	}
 	return &Override{cs}
 }
-
-// StandardTLS is a magictls filter that will engage TLS mode but not wait for handshake.
-func StandardTLS(conn *Conn, srv *Listener) error {
-	cs := tls.Server(conn, srv.TLSConfig)
-	return &Override{cs}
-}

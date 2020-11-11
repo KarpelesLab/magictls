@@ -32,6 +32,7 @@ func init() {
 		IsCA:                  true,
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().Add(24 * time.Hour),
+		DNSNames:              []string{"localhost"},
 	}
 
 	caBin, err := x509.CreateCertificate(rand.Reader, catpl, catpl, pk.Public(), pk)
