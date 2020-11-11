@@ -42,5 +42,10 @@ This can be used with [autocert](https://godoc.org/golang.org/x/crypto/acme/auto
 	}
 	cfg := m.TLSConfig()
 	// you may want to add to cfg.NextProtos any protocol you want to handle with ProtoListener. Be careful to not overwrite it.
+	cfg.NextProtos = append(cfg.NextProtos, "my-proto")
 	socket, err := magictls.Listen("tcp", ":8443", cfg)
+	if err != nil {
+		...
+	}
+	socket.Filters = []magictls.Filter{magictls.StandardTLS} // you need to defer handshake via StandardTLS, or have more than one listener
 	...
