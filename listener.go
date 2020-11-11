@@ -235,6 +235,10 @@ func (r *Listener) listenLoop() {
 			close(r.queue)
 			return
 		} else {
+			// enable tcp keepalive since ssl connections typically do a lot of back/forth
+			c.SetKeepAlive(true)
+			c.SetKeepAlivePeriod(3 * time.Minute)
+
 			go r.HandleConn(c)
 		}
 	}
