@@ -204,15 +204,15 @@ func (r *Listener) processFilters(c net.Conn) {
 			// grab lock
 			r.protoLk.RLock()
 			v, ok := r.proto[np]
+			r.protoLk.RUnlock()
+
 			if !ok {
-				r.protoLk.RUnlock()
 				r.queue <- queuePoint{c: final}
 				return
 			}
 
 			// send value
 			v.queue <- &queuePoint{c: final, e: nil}
-			r.protoLk.RUnlock()
 			return
 		}
 	}
