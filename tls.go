@@ -21,7 +21,7 @@ func DetectTLS(conn *Conn, srv *Listener) error {
 			conn.Close()
 			return err
 		}
-		return &Override{cs}
+		return &Override{Conn: cs}
 	}
 	if buf[0] == 0x16 {
 		// SSLv3, TLS
@@ -31,7 +31,7 @@ func DetectTLS(conn *Conn, srv *Listener) error {
 			conn.Close()
 			return err
 		}
-		return &Override{cs}
+		return &Override{Conn: cs}
 	}
 
 	// probably not tls
@@ -44,5 +44,5 @@ func ForceTLS(conn *Conn, srv *Listener) error {
 	if err := cs.Handshake(); err != nil {
 		return err
 	}
-	return &Override{cs}
+	return &Override{Conn: cs}
 }

@@ -157,6 +157,7 @@ func (r *Listener) processFilters(c net.Conn) {
 	}
 
 	var tlsconn *tls.Conn
+	var negociatedProtocol string
 
 	// for each filter
 	for _, f := range r.Filters {
@@ -167,15 +168,20 @@ func (r *Listener) processFilters(c net.Conn) {
 				continue
 			}
 			if ov, ok := err.(*Override); ok {
-				if t, ok := ov.Conn.(*tls.Conn); ok {
-					// keep this tls connection nearby
-					tlsconn = t
+				if ov.Conn != nil {
+					if t, ok := ov.Conn.(*tls.Conn); ok {
+						// keep this tls connection nearby
+						tlsconn = t
+					}
+					// perform override
+					cw = &Conn{
+						conn: ov.Conn,
+						l:    ov.Conn.LocalAddr(),
+						r:    ov.Conn.RemoteAddr(),
+					}
 				}
-				// perform override
-				cw = &Conn{
-					conn: ov.Conn,
-					l:    ov.Conn.LocalAddr(),
-					r:    ov.Conn.RemoteAddr(),
+				if ov.Protocol != "" {
+					negociatedProtocol = ov.Protocol
 				}
 				continue
 			}
@@ -196,21 +202,18 @@ func (r *Listener) processFilters(c net.Conn) {
 		final = cw.conn
 	}
 
-	if tlsconn != nil {
+	if tlsconn != nil && negociatedProtocol == "" {
 		// special case: this is a tls socket. Check NegotiatedProtocol
-		np := tlsconn.ConnectionState().NegotiatedProtocol
+		negociatedProtocol = tlsconn.ConnectionState().NegotiatedProtocol
+	}
 
-		if np != "" {
-			// grab lock
-			r.protoLk.RLock()
-			v, ok := r.proto[np]
-			r.protoLk.RUnlock()
+	if negociatedProtocol != "" {
+		// grab lock
+		r.protoLk.RLock()
+		v, ok := r.proto[negociatedProtocol]
+		r.protoLk.RUnlock()
 
-			if !ok {
-				r.queue <- queuePoint{c: final}
-				return
-			}
-
+		if ok {
 			// send value
 			v.queue <- &queuePoint{c: final, e: nil}
 			return
