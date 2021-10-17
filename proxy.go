@@ -131,6 +131,10 @@ func DetectProxy(cw *Conn, srv *Listener) error {
 }
 
 func parseProxyLine(c *Conn, buf []byte) error {
+	if buf[len(buf)-1] == '\r' {
+		buf = buf[:len(buf)-1]
+	}
+
 	s := bytes.Split(buf, []byte{' '})
 	if bytes.Compare(s[0], []byte("PROXY")) != 0 {
 		return &proxyError{version: 1, msg: "invalid proxy line provided"}
