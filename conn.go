@@ -83,6 +83,14 @@ func (c *Conn) RemoteAddr() net.Addr {
 	return c.r
 }
 
+func (c *Conn) SetLocalAddr(l net.Addr) {
+	c.l = l
+}
+
+func (c *Conn) SetRemoteAddr(r net.Addr) {
+	c.r = r
+}
+
 func (c *Conn) SetDeadline(t time.Time) error {
 	return c.conn.SetDeadline(t)
 }
