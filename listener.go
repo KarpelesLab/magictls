@@ -21,7 +21,8 @@ type queuePoint struct {
 // PROXY protocol automatically. It assumes no matter what the used protocol
 // is, at least 16 bytes will always be initially sent (true for HTTP).
 type Listener struct {
-	port    *net.TCPListener
+	ports   []*net.TCPListener
+	portsLk sync.Mutex
 	addr    net.Addr
 	queue   chan queuePoint
 	proto   map[string]*protoListener
@@ -46,28 +47,13 @@ type Listener struct {
 // If the connection uses TLS protocol, then Accept() returned net.Conn will
 // actually be a tls.Conn object.
 func Listen(network, laddr string, config *tls.Config) (*Listener, error) {
-	r := &Listener{
-		proto: make(map[string]*protoListener),
-	}
-
-	addr, err := net.ResolveTCPAddr(network, laddr)
-	if err != nil {
-		return nil, err
-	}
-
-	r.port, err = net.ListenTCP(network, addr)
-	if err != nil {
-		return nil, err
-	}
-
-	r.addr = r.port.Addr()
-	r.queue = make(chan queuePoint, 8)
+	r := ListenNull()
 	r.TLSConfig = config
-	r.Filters = []Filter{DetectProxy, DetectTLS}
-	r.thMax = 64
 
-	// listenloop will accept connections then push them to the queue
-	go r.listenLoop()
+	if err := r.Listen(network, laddr); err != nil {
+		return nil, err
+	}
+
 	return r, nil
 }
 
@@ -79,7 +65,34 @@ func ListenNull() *Listener {
 		queue:   make(chan queuePoint, 8),
 		proto:   make(map[string]*protoListener),
 		Filters: []Filter{DetectProxy, DetectTLS},
+		thMax:   64,
 	}
+}
+
+// Listen makes the given listener listen on an extra port. Each listener will
+// spawn a new goroutine.
+func (r *Listener) Listen(network, laddr string) error {
+	addr, err := net.ResolveTCPAddr(network, laddr)
+	if err != nil {
+		return err
+	}
+
+	port, err := net.ListenTCP(network, addr)
+	if err != nil {
+		return err
+	}
+
+	if r.addr == nil {
+		r.addr = port.Addr()
+	}
+
+	r.portsLk.Lock()
+	defer r.portsLk.Unlock()
+
+	r.ports = append(r.ports, port)
+
+	go r.listenLoop(port)
+	return nil
 }
 
 // ProtoListener returns a net.Listener that will receive connections for which
@@ -224,12 +237,16 @@ func (r *Listener) processFilters(c net.Conn) {
 
 // Close() closes the socket.
 func (r *Listener) Close() error {
-	if r.port != nil {
-		if err := r.port.Close(); err != nil {
+	r.portsLk.Lock()
+	defer r.portsLk.Unlock()
+
+	for n, port := range r.ports {
+		if err := port.Close(); err != nil {
+			r.ports = r.ports[n:] // drop any port that was successfully closed
 			return err
 		}
-		r.port = nil
 	}
+	r.ports = nil
 	return nil
 }
 
@@ -239,10 +256,10 @@ func (r *Listener) Addr() net.Addr {
 	return r.addr
 }
 
-func (r *Listener) listenLoop() {
+func (r *Listener) listenLoop(port *net.TCPListener) {
 	var tempDelay time.Duration // how long to sleep on accept failure
 	for {
-		c, err := r.port.AcceptTCP()
+		c, err := port.AcceptTCP()
 		if err != nil {
 			// check for temporary error
 			if ne, ok := err.(net.Error); ok && ne.Temporary() {
