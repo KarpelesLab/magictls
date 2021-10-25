@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
 	"sync"
 	"time"
 )
@@ -31,6 +32,7 @@ type Listener struct {
 	TLSConfig *tls.Config
 	Filters   []Filter
 	*log.Logger
+	Timeout time.Duration
 
 	// threads
 	thCnt     uint32
@@ -65,6 +67,7 @@ func ListenNull() *Listener {
 		queue:   make(chan queuePoint, 8),
 		proto:   make(map[string]*protoListener),
 		Filters: []Filter{DetectProxy, DetectTLS},
+		Timeout: 2 * time.Second,
 		thMax:   64,
 	}
 }
@@ -174,10 +177,15 @@ func (r *Listener) processFilters(c net.Conn) {
 
 	// for each filter
 	for _, f := range r.Filters {
+		cw.SetReadDeadline(time.Now().Add(r.Timeout))
 		err := f(cw, r)
 		if err != nil {
 			if err == io.EOF {
 				// ignore EOF errors, those are typically not important
+				continue
+			}
+			if errors.Is(err, os.ErrDeadlineExceeded) {
+				// timeout reached for running this filter
 				continue
 			}
 			if ov, ok := err.(*Override); ok {
@@ -207,6 +215,7 @@ func (r *Listener) processFilters(c net.Conn) {
 			return
 		}
 	}
+	cw.SetReadDeadline(time.Time{}) // disable any timeout
 
 	var final net.Conn
 	final = cw
