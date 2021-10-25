@@ -231,7 +231,7 @@ func (r *Listener) processFilters(c net.Conn, filters []Filter) {
 
 	var final net.Conn
 	final = cw
-	if cw.rbuf == nil {
+	if !cw.isUsed() {
 		// skip cw
 		final = cw.conn
 	}

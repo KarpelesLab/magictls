@@ -11,6 +11,14 @@ type Conn struct {
 	conn net.Conn
 	rbuf []byte
 	l, r net.Addr
+	used bool
+}
+
+func (c *Conn) isUsed() bool {
+	if len(c.rbuf) != 0 {
+		return true
+	}
+	return c.used
 }
 
 func (c *Conn) Read(b []byte) (int, error) {
@@ -85,10 +93,12 @@ func (c *Conn) RemoteAddr() net.Addr {
 
 func (c *Conn) SetLocalAddr(l net.Addr) {
 	c.l = l
+	c.used = true
 }
 
 func (c *Conn) SetRemoteAddr(r net.Addr) {
 	c.r = r
+	c.used = true
 }
 
 func (c *Conn) SetDeadline(t time.Time) error {
