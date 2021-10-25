@@ -75,6 +75,12 @@ func ListenNull() *Listener {
 // Listen makes the given listener listen on an extra port. Each listener will
 // spawn a new goroutine.
 func (r *Listener) Listen(network, laddr string) error {
+	return r.ListenFilter(network, laddr, nil)
+}
+
+// ListenFilter listens on a given port with the selected filters used instead
+// of the default ones.
+func (r *Listener) ListenFilter(network, laddr string, filters []Filter) error {
 	addr, err := net.ResolveTCPAddr(network, laddr)
 	if err != nil {
 		return err
@@ -94,7 +100,7 @@ func (r *Listener) Listen(network, laddr string) error {
 
 	r.ports = append(r.ports, port)
 
-	go r.listenLoop(port)
+	go r.listenLoop(port, filters)
 	return nil
 }
 
@@ -159,7 +165,7 @@ func (r *Listener) Accept() (net.Conn, error) {
 }
 
 // processFilters is run in a thread and will execute filters as needed.
-func (r *Listener) processFilters(c net.Conn) {
+func (r *Listener) processFilters(c net.Conn, filters []Filter) {
 	defer func() {
 		r.thCntLock.Lock()
 		r.thCnt -= 1
@@ -172,11 +178,17 @@ func (r *Listener) processFilters(c net.Conn) {
 		r:    c.RemoteAddr(),
 	}
 
-	var tlsconn *tls.Conn
-	var negociatedProtocol string
+	var (
+		tlsconn            *tls.Conn
+		negociatedProtocol string
+	)
+
+	if filters == nil {
+		filters = r.Filters
+	}
 
 	// for each filter
-	for _, f := range r.Filters {
+	for _, f := range filters {
 		cw.SetReadDeadline(time.Now().Add(r.Timeout))
 		err := f(cw, r)
 		if err != nil {
@@ -265,7 +277,7 @@ func (r *Listener) Addr() net.Addr {
 	return r.addr
 }
 
-func (r *Listener) listenLoop(port *net.TCPListener) {
+func (r *Listener) listenLoop(port *net.TCPListener, filterOverride []Filter) {
 	var tempDelay time.Duration // how long to sleep on accept failure
 	for {
 		c, err := port.AcceptTCP()
@@ -293,7 +305,7 @@ func (r *Listener) listenLoop(port *net.TCPListener) {
 			c.SetKeepAlive(true)
 			c.SetKeepAlivePeriod(3 * time.Minute)
 
-			r.HandleConn(c)
+			r.HandleConn(c, filterOverride)
 		}
 	}
 }
@@ -306,7 +318,7 @@ func (r *Listener) PushConn(c net.Conn) {
 
 // HandleConn will run detection on a given incoming connection and attempt to
 // find if it should parse any kind of PROXY headers, or TLS handshake/etc.
-func (r *Listener) HandleConn(c net.Conn) {
+func (r *Listener) HandleConn(c net.Conn, filterOverride []Filter) {
 	r.thCntLock.Lock()
 	if r.thCnt >= r.thMax {
 		// out of luck
@@ -317,7 +329,7 @@ func (r *Listener) HandleConn(c net.Conn) {
 	r.thCnt += 1
 	r.thCntLock.Unlock()
 
-	go r.processFilters(c)
+	go r.processFilters(c, filterOverride)
 }
 
 func (p *Listener) String() string {
