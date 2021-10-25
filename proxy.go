@@ -150,8 +150,8 @@ func parseProxyLine(c *Conn, buf []byte) error {
 		}
 		rPort, _ := strconv.Atoi(string(s[4]))
 		lPort, _ := strconv.Atoi(string(s[5]))
-		c.r = &net.TCPAddr{IP: net.ParseIP(string(s[2])), Port: rPort}
-		c.l = &net.TCPAddr{IP: net.ParseIP(string(s[3])), Port: lPort}
+		c.SetRemoteAddr(&net.TCPAddr{IP: net.ParseIP(string(s[2])), Port: rPort})
+		c.SetLocalAddr(&net.TCPAddr{IP: net.ParseIP(string(s[3])), Port: lPort})
 		return nil
 	default:
 		return &proxyError{version: 1, msg: "invalid proxy transport provided"}
@@ -207,8 +207,8 @@ func parseProxyV2Data(c *Conn, verCmd, fam uint8, d []byte) error {
 		binary.Read(b, binary.BigEndian, &rPort)
 		binary.Read(b, binary.BigEndian, &lPort)
 
-		c.r = &net.TCPAddr{IP: rip, Port: int(rPort)}
-		c.l = &net.TCPAddr{IP: lip, Port: int(lPort)}
+		c.SetRemoteAddr(&net.TCPAddr{IP: rip, Port: int(rPort)})
+		c.SetLocalAddr(&net.TCPAddr{IP: lip, Port: int(lPort)})
 	case 0x2: // AF_INET6
 		if len(d) < 36 {
 			return &proxyError{version: 2, msg: "not enough data for ipv6"}
@@ -220,8 +220,8 @@ func parseProxyV2Data(c *Conn, verCmd, fam uint8, d []byte) error {
 		binary.Read(b, binary.BigEndian, &rPort)
 		binary.Read(b, binary.BigEndian, &lPort)
 
-		c.r = &net.TCPAddr{IP: rip, Port: int(rPort)}
-		c.l = &net.TCPAddr{IP: lip, Port: int(lPort)}
+		c.SetRemoteAddr(&net.TCPAddr{IP: rip, Port: int(rPort)})
+		c.SetLocalAddr(&net.TCPAddr{IP: lip, Port: int(lPort)})
 	}
 	return nil
 }
