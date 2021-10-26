@@ -1,6 +1,7 @@
 package magictls
 
 import (
+	"crypto/tls"
 	"net"
 	"time"
 )
@@ -119,4 +120,19 @@ func (c *Conn) Unwrap() net.Conn {
 		return nil
 	}
 	return c.conn
+}
+
+// GetTlsConn will attempt to unwrap the given connection in order to locate
+// a TLS connection, or return nil if none found.
+func GetTlsConn(c net.Conn) *tls.Conn {
+	for {
+		switch cv := c.(type) {
+		case *tls.Conn:
+			return cv
+		case interface{ Unwrap() net.Conn }:
+			c = cv.Unwrap()
+		default:
+			return nil
+		}
+	}
 }
