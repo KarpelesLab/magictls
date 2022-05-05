@@ -18,11 +18,11 @@ type queuePoint struct {
 	e error
 }
 
-// Listener is a TCP network listener supporting TLS and
+// Listener is a stream network listener supporting TLS and
 // PROXY protocol automatically. It assumes no matter what the used protocol
 // is, at least 16 bytes will always be initially sent (true for HTTP).
 type Listener struct {
-	ports   []*net.TCPListener
+	ports   []net.Listener
 	portsLk sync.Mutex
 	addr    net.Addr
 	queue   chan queuePoint
@@ -81,12 +81,7 @@ func (r *Listener) Listen(network, laddr string) error {
 // ListenFilter listens on a given port with the selected filters used instead
 // of the default ones.
 func (r *Listener) ListenFilter(network, laddr string, filters []Filter) error {
-	addr, err := net.ResolveTCPAddr(network, laddr)
-	if err != nil {
-		return err
-	}
-
-	port, err := net.ListenTCP(network, addr)
+	port, err := net.Listen(network, laddr)
 	if err != nil {
 		return err
 	}
@@ -277,10 +272,10 @@ func (r *Listener) Addr() net.Addr {
 	return r.addr
 }
 
-func (r *Listener) listenLoop(port *net.TCPListener, filterOverride []Filter) {
+func (r *Listener) listenLoop(port net.Listener, filterOverride []Filter) {
 	var tempDelay time.Duration // how long to sleep on accept failure
 	for {
-		c, err := port.AcceptTCP()
+		c, err := port.Accept()
 		if err != nil {
 			// check for temporary error
 			if ne, ok := err.(net.Error); ok && ne.Temporary() {
@@ -301,9 +296,11 @@ func (r *Listener) listenLoop(port *net.TCPListener, filterOverride []Filter) {
 			close(r.queue)
 			return
 		} else {
-			// enable tcp keepalive since ssl connections typically do a lot of back/forth
-			c.SetKeepAlive(true)
-			c.SetKeepAlivePeriod(3 * time.Minute)
+			// enable tcp keepalive
+			if kc, ok := c.(tcpKeepaliveConn); ok {
+				kc.SetKeepAlive(true)
+				kc.SetKeepAlivePeriod(3 * time.Minute)
+			}
 
 			r.HandleConn(c, filterOverride)
 		}
