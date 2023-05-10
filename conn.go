@@ -1,6 +1,7 @@
 package magictls
 
 import (
+	"bufio"
 	"crypto/tls"
 	"net"
 	"time"
@@ -135,4 +136,21 @@ func GetTlsConn(c net.Conn) *tls.Conn {
 			return nil
 		}
 	}
+}
+
+// HijackedConn allows returning a simple net.Conn from a Conn+ReadWriter as returned by http.Hijacker.Hijack()
+func HijackedConn(c net.Conn, io *bufio.ReadWriter, err error) (net.Conn, error) {
+	if err != nil {
+		return nil, err
+	}
+	ln := io.Reader.Buffered()
+	if ln == 0 {
+		// nothing in reader, let's just return c
+		return c, nil
+	}
+	data, err := io.Reader.Peek(ln) // should not fail
+	if err != nil {
+		return nil, err
+	}
+	return &Conn{conn: c, rbuf: data, l: c.LocalAddr(), r: c.RemoteAddr()}, nil
 }
