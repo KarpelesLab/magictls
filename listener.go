@@ -67,7 +67,7 @@ func ListenNull() *Listener {
 		queue:   make(chan queuePoint, 8),
 		proto:   make(map[string]*protoListener),
 		Filters: []Filter{DetectProxy, DetectTLS},
-		Timeout: 2 * time.Second,
+		Timeout: 15 * time.Second,
 		thMax:   64,
 	}
 }
