@@ -62,7 +62,10 @@ func AddAllowedProxiesSpf(spfhosts ...string) error {
 	var cidrs []string
 
 	for _, host := range spfhosts {
-		txtrecords, _ := net.LookupTXT(host)
+		txtrecords, err := net.LookupTXT(host)
+		if err != nil {
+			return err
+		}
 		for _, rec := range txtrecords {
 			// typical response: v=spf1 ip4:<cidr> ~all
 			recData := strings.Fields(rec)
