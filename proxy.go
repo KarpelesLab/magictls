@@ -7,12 +7,13 @@ import (
 	"log"
 	"net"
 	"strconv"
+	"strings"
 )
 
 var allowedProxyIps []*net.IPNet
 
 func init() {
-	SetAllowedProxies([]string{"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1/128", "fd00::/8"})
+	SetAllowedProxies("127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1/128", "fd00::/8")
 }
 
 type proxyError struct {
@@ -30,9 +31,16 @@ func (p *proxyError) Error() string {
 //
 // By default all local IPs are allowed as these cannot appear on Internet.
 //
-// SetAllowedProxies([]string{"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1/128", "fd00::/8"})
-func SetAllowedProxies(cidrs []string) error {
-	allowed := []*net.IPNet{}
+// SetAllowedProxies("127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1/128", "fd00::/8")
+func SetAllowedProxies(cidrs ...string) error {
+	allowedProxyIps = nil
+
+	return AddAllowedProxies(cidrs...)
+}
+
+// AddAllowedProxies adds to the list of allowed proxies
+func AddAllowedProxies(cidrs ...string) error {
+	allowed := allowedProxyIps
 
 	for _, s := range cidrs {
 		_, ipn, err := net.ParseCIDR(s)
@@ -44,6 +52,39 @@ func SetAllowedProxies(cidrs []string) error {
 
 	allowedProxyIps = allowed
 	return nil
+}
+
+// AddAllowedProxiesSpf will perform TXT lookup on the given hosts and add
+// those IPs as allowed proxies. This is only performed once and may need to
+// be refreshed from times to times.
+func AddAllowedProxiesSpf(spfhosts ...string) error {
+	// example: magictls.AddAllowedProxiesSpf("_cloud-eoips.googleusercontent.com")
+	var cidrs []string
+
+	for _, host := range spfhosts {
+		txtrecords, _ := net.LookupTXT(host)
+		for _, rec := range txtrecords {
+			// typical response: v=spf1 ip4:<cidr> ~all
+			recData := strings.Fields(rec)
+			for _, rec := range recData {
+				if val, ok := strings.CutPrefix(rec, "ip4:"); ok {
+					if strings.IndexByte(val, '/') == -1 {
+						// no / found, this is a host and not a cidr
+						val += "/32"
+					}
+					cidrs = append(cidrs, val)
+				} else if val, ok = strings.CutPrefix(rec, "ip6:"); ok {
+					if strings.IndexByte(val, '/') == -1 {
+						// no / found, this is a host and not a cidr
+						val += "/128"
+					}
+					cidrs = append(cidrs, val)
+				}
+			}
+		}
+	}
+
+	return AddAllowedProxies(cidrs...)
 }
 
 // DetectProxy is a magictls filter that will detect proxy protocol headers

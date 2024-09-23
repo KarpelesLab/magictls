@@ -17,40 +17,57 @@ It is written to work with protocols where the client sends the first data, and 
 
 Use `magictls.Listen()` to create sockets the same way you would use `tls.Listen()`.
 
-	socket, err := magictls.Listen("tcp", ":8080", tlsConfig)
-	if err != nil {
-		...
-	}
-	log.Fatal(http.Serve(socket, handler))
+```go
+socket, err := magictls.Listen("tcp", ":8080", tlsConfig)
+if err != nil {
+	...
+}
+log.Fatal(http.Serve(socket, handler))
+```
 
 The created listener can receive various configurations. For example if you need to force all connections to be TLS and only want to use PROXY protocol detection:
 
-	socket, err := magictls.Listen("tcp", ":8443", tlsConfig)
-	if err != nil {
-		...
-	}
-	socket.Filters = []magictls.Filter{magictls.DetectProxy, magictls.ForceTLS}
-	log.Fatal(http.Serve(socket, handler))
+```go
+socket, err := magictls.Listen("tcp", ":8443", tlsConfig)
+if err != nil {
+	...
+}
+socket.Filters = []magictls.Filter{magictls.DetectProxy, magictls.ForceTLS}
+log.Fatal(http.Serve(socket, handler))
+```
 
 It is also possible to implement your own filters.
+
+### PROXY protocol allowed IPs
+
+Depending on your provider, you may need to allow more than the local IPs for PROXY protocol.
+
+For example Google Cloud's global load balancer [uses a wider range of IPs](https://cloud.google.com/load-balancing/docs/firewall-rules) that may come with PROXY requests and need this to be called:
+
+```go
+magictls.AddAllowedProxies("35.191.0.0/16", "130.211.0.0/22", "2600:2d00:1:b029::/64", "2600:2d00:1:1::/64")
+magictls.AddAllowedProxiesSpf("_cloud-eoips.googleusercontent.com")
+```
 
 ### autocert
 
 This can be used with [autocert](https://godoc.org/golang.org/x/crypto/acme/autocert) too for automatic TLS certificates. Note that in this case you are required to have a listener on port 443.
 
-	// initialize autocert structure
-	m := &autocert.Manager{
-		Prompt: autocert.AcceptTOS,
-		HostPolicy: autocert.HostWhitelist("domain", "domain2"),
-		Cache: autocert.DirCache("/tmp"), // use os.UserCacheDir() to find where to put that
-	}
-	// grab autocert TLS config
-	cfg := m.TLSConfig()
-	// you may want to add to cfg.NextProtos any protocol you want to handle with ProtoListener. Be careful to not overwrite it.
-	cfg.NextProtos = append(cfg.NextProtos, "my-proto")
-	// standard listen
-	socket, err := magictls.Listen("tcp", ":443", cfg)
-	if err != nil {
-		...
-	}
+```go
+// initialize autocert structure
+m := &autocert.Manager{
+	Prompt: autocert.AcceptTOS,
+	HostPolicy: autocert.HostWhitelist("domain", "domain2"),
+	Cache: autocert.DirCache("/tmp"), // use os.UserCacheDir() to find where to put that
+}
+// grab autocert TLS config
+cfg := m.TLSConfig()
+// you may want to add to cfg.NextProtos any protocol you want to handle with ProtoListener. Be careful to not overwrite it.
+cfg.NextProtos = append(cfg.NextProtos, "my-proto")
+// standard listen
+socket, err := magictls.Listen("tcp", ":443", cfg)
+if err != nil {
 	...
+}
+...
+```
