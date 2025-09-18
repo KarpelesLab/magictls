@@ -123,6 +123,21 @@ func (c *Conn) Unwrap() net.Conn {
 	return c.conn
 }
 
+// NetConn returns the underlying tcp connection. Read or write to this connection will
+// likely corrupt it.
+func (c *Conn) NetConn() net.Conn {
+	res := c.conn
+
+	for {
+		if c2, ok := res.(interface{ NetConn() net.Conn }); ok {
+			res = c2.NetConn()
+		} else {
+			// no more levels
+			return res
+		}
+	}
+}
+
 // GetTlsConn will attempt to unwrap the given connection in order to locate
 // a TLS connection, or return nil if none found.
 func GetTlsConn(c net.Conn) *tls.Conn {
