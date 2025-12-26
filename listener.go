@@ -275,6 +275,79 @@ func (r *Listener) Addr() net.Addr {
 	return r.addr
 }
 
+// filer is implemented by net.TCPListener, net.UnixListener, etc.
+type filer interface {
+	File() (*os.File, error)
+}
+
+// File returns a copy of the underlying file descriptor for the primary
+// listener. This is useful for performing seamless/graceful upgrades by
+// passing the fd to a new process.
+//
+// The returned *os.File is a duplicate; closing it does not affect the
+// listener. The caller is responsible for closing the returned file.
+//
+// To recreate a listener from the file descriptor in another process, use:
+//
+//	ln, err := net.FileListener(f)
+//
+// Returns an error if the listener has no ports or the underlying listener
+// does not support File().
+func (r *Listener) File() (*os.File, error) {
+	r.portsLk.Lock()
+	defer r.portsLk.Unlock()
+
+	if len(r.ports) == 0 {
+		return nil, errors.New("magictls: listener has no ports")
+	}
+
+	if fl, ok := r.ports[0].(filer); ok {
+		return fl.File()
+	}
+
+	return nil, errors.New("magictls: underlying listener does not support File()")
+}
+
+// Files returns copies of file descriptors for all underlying listeners.
+// This is useful when the listener is bound to multiple ports and all need
+// to be passed to a new process for seamless upgrades.
+//
+// The returned files are duplicates; closing them does not affect the
+// listeners. The caller is responsible for closing all returned files.
+//
+// Returns an error if any underlying listener does not support File().
+func (r *Listener) Files() ([]*os.File, error) {
+	r.portsLk.Lock()
+	defer r.portsLk.Unlock()
+
+	if len(r.ports) == 0 {
+		return nil, nil
+	}
+
+	files := make([]*os.File, 0, len(r.ports))
+	for _, port := range r.ports {
+		fl, ok := port.(filer)
+		if !ok {
+			// close any files we already opened
+			for _, f := range files {
+				f.Close()
+			}
+			return nil, errors.New("magictls: underlying listener does not support File()")
+		}
+		f, err := fl.File()
+		if err != nil {
+			// close any files we already opened
+			for _, f := range files {
+				f.Close()
+			}
+			return nil, err
+		}
+		files = append(files, f)
+	}
+
+	return files, nil
+}
+
 func (r *Listener) listenLoop(port net.Listener, filterOverride []Filter) {
 	var tempDelay time.Duration // how long to sleep on accept failure
 	for {

@@ -202,6 +202,45 @@ if err != nil {
 log.Fatal(http.Serve(socket, handler))
 ```
 
+## Seamless Upgrades
+
+For zero-downtime deployments, you can pass the listener's file descriptor to a new process:
+
+```go
+// In the parent process: get the fd and pass it to the child
+f, err := socket.File()
+if err != nil {
+    log.Fatal(err)
+}
+defer f.Close()
+
+// Pass fd to child process (e.g., via ExtraFiles)
+cmd := exec.Command(os.Args[0], "--upgrade")
+cmd.ExtraFiles = []*os.File{f}
+cmd.Env = append(os.Environ(), "LISTEN_FD=3") // fd 3 is first ExtraFile
+cmd.Start()
+```
+
+```go
+// In the child process: recreate the listener from fd
+if fdStr := os.Getenv("LISTEN_FD"); fdStr != "" {
+    fd, _ := strconv.Atoi(fdStr)
+    f := os.NewFile(uintptr(fd), "listener")
+    ln, err := net.FileListener(f)
+    f.Close()
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // Wrap with magictls for TLS/PROXY detection
+    socket := magictls.ListenNull()
+    socket.TLSConfig = tlsConfig
+    // Use socket.HandleConn() or implement your own accept loop
+}
+```
+
+For multiple listeners, use `Files()` to get all file descriptors.
+
 ## API Reference
 
 ### Main Types
@@ -224,6 +263,8 @@ log.Fatal(http.Serve(socket, handler))
 - `SetAllowedProxies(cidrs...)` - Set allowed PROXY protocol source IPs
 - `AddAllowedProxies(cidrs...)` - Add to allowed PROXY protocol source IPs
 - `GetTlsConn(conn)` - Extract *tls.Conn from wrapped connections
+- `(*Listener).File()` - Get file descriptor for seamless upgrades
+- `(*Listener).Files()` - Get all file descriptors (multi-port listeners)
 
 ## Thread Safety
 
