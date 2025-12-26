@@ -3,71 +3,239 @@
 [![Build Status](https://github.com/KarpelesLab/magictls/workflows/Go/badge.svg)](https://github.com/KarpelesLab/magictls/actions)
 [![GoDoc](https://godoc.org/github.com/KarpelesLab/magictls?status.svg)](https://godoc.org/github.com/KarpelesLab/magictls)
 
-A simple Go library that detects protocol automatically:
+A Go library that provides automatic protocol detection for TCP connections, enabling a single port to handle multiple protocols transparently.
 
-* Support for PROXY and PROXYv2 allows detecting the real user's IP when, for example, [using AWS elastic load balancers](https://docs.aws.amazon.com/elasticloadbalancing/latest/classic/enable-proxy-protocol.html). The fact the protocol is detected automatically allows the daemon to work even before ELB is properly configured, and avoid rejecting requests by mistake.
-* Automatic TLS support allows using a single port for SSL and non-SSL traffic, and simplifies configuration.
-* Allows creating listener for specific TLS negociated protocols, allowing a single port to be used for many things easily.
+## Features
 
-This library was used in some of my projects, I've cleaned it up and licensed it under the MIT License since it's small and useful. Pull requests welcome.
+- **Automatic TLS Detection**: Distinguishes between TLS/SSL and plaintext connections on the same port
+- **PROXY Protocol Support**: Detects both PROXY v1 and v2 headers to extract real client IPs (essential for load balancers like AWS ELB, Google Cloud LB)
+- **Protocol Routing**: Routes connections to different handlers based on TLS-negotiated protocols (ALPN)
+- **Extensible Filter System**: Add custom protocol detection with the Filter interface
+- **Zero External Dependencies**: Uses only the Go standard library
 
-It is written to work with protocols where the client sends the first data, and it expects the client to send at least 16 bytes. This works nicely with HTTP (`GET / HTTP/1.0\r\n` is exactly 16 bytes), SSL, etc. but may not work with protocols such as POP3, IMAP or SMTP where the server is expected to send the first bytes unless TLS is required. In this case using the `ForceTLS` filter only allows to still benefit from the TLS NextProto routing.
+## Installation
 
-## Usage
-
-Use `magictls.Listen()` to create sockets the same way you would use `tls.Listen()`.
-
-```go
-socket, err := magictls.Listen("tcp", ":8080", tlsConfig)
-if err != nil {
-	...
-}
-log.Fatal(http.Serve(socket, handler))
+```bash
+go get github.com/KarpelesLab/magictls
 ```
 
-The created listener can receive various configurations. For example if you need to force all connections to be TLS and only want to use PROXY protocol detection:
+## Requirements
+
+This library works with protocols where:
+- The **client sends the first data** (not the server)
+- The client sends **at least 16 bytes** initially
+
+Works well with: HTTP, TLS/SSL, WebSocket, gRPC
+
+May not work with: POP3, IMAP, SMTP (server speaks first) - unless using `ForceTLS` filter
+
+## Quick Start
+
+### Basic Usage
+
+Replace `tls.Listen()` with `magictls.Listen()` for automatic protocol detection:
+
+```go
+package main
+
+import (
+    "log"
+    "net/http"
+
+    "github.com/KarpelesLab/magictls"
+)
+
+func main() {
+    // Create TLS config
+    tlsConfig := &tls.Config{
+        Certificates: []tls.Certificate{cert},
+    }
+
+    // Create listener with automatic TLS detection
+    socket, err := magictls.Listen("tcp", ":8080", tlsConfig)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // Use with standard http.Server
+    log.Fatal(http.Serve(socket, handler))
+}
+```
+
+Both HTTP and HTTPS requests on port 8080 will be handled automatically.
+
+### Force TLS Only
+
+To require TLS while still supporting PROXY protocol:
 
 ```go
 socket, err := magictls.Listen("tcp", ":8443", tlsConfig)
 if err != nil {
-	...
+    log.Fatal(err)
 }
 socket.Filters = []magictls.Filter{magictls.DetectProxy, magictls.ForceTLS}
+```
+
+### Protocol-Specific Listeners (ALPN)
+
+Route connections based on TLS-negotiated protocols:
+
+```go
+// Configure TLS with supported protocols
+tlsConfig := &tls.Config{
+    Certificates: []tls.Certificate{cert},
+    NextProtos:   []string{"h2", "http/1.1", "my-protocol"},
+}
+
+socket, err := magictls.Listen("tcp", ":443", tlsConfig)
+if err != nil {
+    log.Fatal(err)
+}
+
+// Create listener for custom protocol
+myProtoListener, err := socket.ProtoListener("my-protocol")
+if err != nil {
+    log.Fatal(err)
+}
+
+// Handle custom protocol connections
+go func() {
+    for {
+        conn, err := myProtoListener.Accept()
+        if err != nil {
+            return
+        }
+        go handleMyProtocol(conn)
+    }
+}()
+
+// Main listener handles remaining connections (h2, http/1.1)
 log.Fatal(http.Serve(socket, handler))
 ```
 
-It is also possible to implement your own filters.
+## PROXY Protocol Configuration
 
-### PROXY protocol allowed IPs
+### Default Allowed Proxies
 
-Depending on your provider, you may need to allow more than the local IPs for PROXY protocol.
+By default, only private/local IPs are trusted to send PROXY headers:
+- `127.0.0.0/8` (localhost)
+- `10.0.0.0/8` (private)
+- `172.16.0.0/12` (private)
+- `192.168.0.0/16` (private)
+- `::1/128` (IPv6 localhost)
+- `fd00::/8` (IPv6 private)
 
-For example Google Cloud's global load balancer [uses a wider range of IPs](https://cloud.google.com/load-balancing/docs/firewall-rules) that may come with PROXY requests and need this to be called:
+### Adding Cloud Load Balancer IPs
+
+#### Google Cloud
 
 ```go
-magictls.AddAllowedProxies("35.191.0.0/16", "130.211.0.0/22", "2600:2d00:1:b029::/64", "2600:2d00:1:1::/64")
+magictls.AddAllowedProxies("35.191.0.0/16", "130.211.0.0/22")
+// Or use SPF records for automatic discovery:
 magictls.AddAllowedProxiesSpf("_cloud-eoips.googleusercontent.com")
 ```
 
-### autocert
-
-This can be used with [autocert](https://godoc.org/golang.org/x/crypto/acme/autocert) too for automatic TLS certificates. Note that in this case you are required to have a listener on port 443.
+#### AWS (Custom ranges)
 
 ```go
-// initialize autocert structure
-m := &autocert.Manager{
-	Prompt: autocert.AcceptTOS,
-	HostPolicy: autocert.HostWhitelist("domain", "domain2"),
-	Cache: autocert.DirCache("/tmp"), // use os.UserCacheDir() to find where to put that
+magictls.AddAllowedProxies("10.0.0.0/8") // Your VPC CIDR
+```
+
+#### Reset to Custom List
+
+```go
+magictls.SetAllowedProxies("10.0.0.0/8", "172.16.0.0/12")
+```
+
+## Custom Filters
+
+Implement custom protocol detection by creating a Filter function:
+
+```go
+func MyProtocolFilter(conn *magictls.Conn, srv *magictls.Listener) error {
+    // Peek at first 4 bytes without consuming them
+    buf, err := conn.PeekUntil(4)
+    if err != nil {
+        return err
+    }
+
+    // Check for custom protocol magic bytes
+    if bytes.Equal(buf, []byte("MYCL")) {
+        // Skip the magic bytes
+        conn.SkipPeek(4)
+        // Return Override to signal protocol was detected
+        return &magictls.Override{Protocol: "my-protocol"}
+    }
+
+    return nil // Not our protocol, continue to next filter
 }
-// grab autocert TLS config
+
+// Use the custom filter
+socket.Filters = []magictls.Filter{
+    magictls.DetectProxy,
+    MyProtocolFilter,
+    magictls.DetectTLS,
+}
+```
+
+## Integration with autocert
+
+For automatic Let's Encrypt certificates:
+
+```go
+import "golang.org/x/crypto/acme/autocert"
+
+m := &autocert.Manager{
+    Prompt:     autocert.AcceptTOS,
+    HostPolicy: autocert.HostWhitelist("example.com", "www.example.com"),
+    Cache:      autocert.DirCache("/var/cache/autocert"),
+}
+
 cfg := m.TLSConfig()
-// you may want to add to cfg.NextProtos any protocol you want to handle with ProtoListener. Be careful to not overwrite it.
-cfg.NextProtos = append(cfg.NextProtos, "my-proto")
-// standard listen
+cfg.NextProtos = append(cfg.NextProtos, "my-protocol") // Add custom protocols
+
 socket, err := magictls.Listen("tcp", ":443", cfg)
 if err != nil {
-	...
+    log.Fatal(err)
 }
-...
+
+log.Fatal(http.Serve(socket, handler))
 ```
+
+## API Reference
+
+### Main Types
+
+- `Listener` - The main listener that accepts connections and runs filters
+- `Conn` - Connection wrapper with peek/unread support for protocol detection
+- `Filter` - Function type for protocol detection: `func(*Conn, *Listener) error`
+- `Override` - Special error type returned by filters to signal connection changes
+
+### Built-in Filters
+
+- `DetectProxy` - Detects PROXY v1/v2 headers and updates connection addresses
+- `DetectTLS` - Auto-detects TLS/SSL vs plaintext connections
+- `ForceTLS` - Requires TLS handshake (no plaintext support)
+
+### Key Functions
+
+- `Listen(network, addr, tlsConfig)` - Create a new listener
+- `ListenNull()` - Create a listener without binding (for custom use with PushConn)
+- `SetAllowedProxies(cidrs...)` - Set allowed PROXY protocol source IPs
+- `AddAllowedProxies(cidrs...)` - Add to allowed PROXY protocol source IPs
+- `GetTlsConn(conn)` - Extract *tls.Conn from wrapped connections
+
+## Thread Safety
+
+The library is thread-safe. Multiple goroutines can:
+- Accept connections from the same listener
+- Modify allowed proxy IPs (with proper synchronization)
+- Use protocol-specific listeners concurrently
+
+## License
+
+MIT License - see LICENSE file for details.
+
+## Contributing
+
+Pull requests welcome! Please ensure tests pass with `go test ./...`.

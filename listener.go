@@ -11,8 +11,11 @@ import (
 	"time"
 )
 
+// ErrDuplicateProtocol is returned by ProtoListener when attempting to
+// register a listener for a protocol that is already registered.
 var ErrDuplicateProtocol = errors.New("protocol already has a listener")
 
+// queuePoint represents a connection (or error) in the accept queue.
 type queuePoint struct {
 	c net.Conn
 	e error
@@ -38,7 +41,6 @@ type Listener struct {
 	thCnt     uint32
 	thMax     uint32
 	thCntLock sync.RWMutex
-	thCntCond sync.Cond
 }
 
 // Listen creates a hybrid TCP/TLS listener accepting connections on the given
@@ -100,8 +102,8 @@ func (r *Listener) ListenFilter(network, laddr string, filters []Filter) error {
 }
 
 // ProtoListener returns a net.Listener that will receive connections for which
-// TLS is enabled and the specified protocol(s) have been negociated between
-// client and server.
+// TLS is enabled and the specified protocol(s) have been negotiated between
+// client and server via TLS ALPN (Application-Layer Protocol Negotiation).
 func (r *Listener) ProtoListener(proto ...string) (net.Listener, error) {
 	r.protoLk.Lock()
 	defer r.protoLk.Unlock()
@@ -175,7 +177,7 @@ func (r *Listener) processFilters(c net.Conn, filters []Filter) {
 
 	var (
 		tlsconn            *tls.Conn
-		negociatedProtocol string
+		negotiatedProtocol string
 	)
 
 	if filters == nil {
@@ -209,7 +211,7 @@ func (r *Listener) processFilters(c net.Conn, filters []Filter) {
 					}
 				}
 				if ov.Protocol != "" {
-					negociatedProtocol = ov.Protocol
+					negotiatedProtocol = ov.Protocol
 				}
 				continue
 			}
@@ -231,15 +233,15 @@ func (r *Listener) processFilters(c net.Conn, filters []Filter) {
 		final = cw.conn
 	}
 
-	if tlsconn != nil && negociatedProtocol == "" {
-		// special case: this is a tls socket. Check NegotiatedProtocol
-		negociatedProtocol = tlsconn.ConnectionState().NegotiatedProtocol
+	if tlsconn != nil && negotiatedProtocol == "" {
+		// special case: this is a TLS socket. Check NegotiatedProtocol
+		negotiatedProtocol = tlsconn.ConnectionState().NegotiatedProtocol
 	}
 
-	if negociatedProtocol != "" {
+	if negotiatedProtocol != "" {
 		// grab lock
 		r.protoLk.RLock()
-		v, ok := r.proto[negociatedProtocol]
+		v, ok := r.proto[negotiatedProtocol]
 		r.protoLk.RUnlock()
 
 		if ok {
@@ -251,7 +253,8 @@ func (r *Listener) processFilters(c net.Conn, filters []Filter) {
 	r.queue <- queuePoint{c: final}
 }
 
-// Close() closes the socket.
+// Close closes all underlying TCP listeners. If any listener fails to close,
+// it returns immediately with the error; remaining listeners may still be open.
 func (r *Listener) Close() error {
 	r.portsLk.Lock()
 	defer r.portsLk.Unlock()
@@ -277,8 +280,10 @@ func (r *Listener) listenLoop(port net.Listener, filterOverride []Filter) {
 	for {
 		c, err := port.Accept()
 		if err != nil {
-			// check for temporary error
-			if ne, ok := err.(net.Error); ok && ne.Temporary() {
+			// check for temporary error (e.g., too many open files)
+			// Note: net.Error.Temporary() is deprecated but this pattern
+			// is still used by net/http for accept loops.
+			if ne, ok := err.(net.Error); ok && ne.Temporary() { //nolint:staticcheck
 				if tempDelay == 0 {
 					tempDelay = 5 * time.Millisecond
 				} else {
@@ -329,6 +334,7 @@ func (r *Listener) HandleConn(c net.Conn, filterOverride []Filter) {
 	go r.processFilters(c, filterOverride)
 }
 
+// String returns the string representation of the listener's address.
 func (p *Listener) String() string {
 	return p.addr.String()
 }

@@ -8,9 +8,13 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 )
 
-var allowedProxyIps []*net.IPNet
+var (
+	allowedProxyIps   []*net.IPNet
+	allowedProxyIpsLk sync.RWMutex
+)
 
 func init() {
 	SetAllowedProxies("127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1/128", "fd00::/8")
@@ -31,26 +35,31 @@ func (p *proxyError) Error() string {
 //
 // By default all local IPs are allowed as these cannot appear on Internet.
 //
-// SetAllowedProxies("127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1/128", "fd00::/8")
+// Example:
+//
+//	SetAllowedProxies("127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1/128", "fd00::/8")
 func SetAllowedProxies(cidrs ...string) error {
+	allowedProxyIpsLk.Lock()
 	allowedProxyIps = nil
+	allowedProxyIpsLk.Unlock()
 
 	return AddAllowedProxies(cidrs...)
 }
 
-// AddAllowedProxies adds to the list of allowed proxies
+// AddAllowedProxies adds CIDR ranges to the list of allowed proxies.
+// These IP ranges will be trusted to send PROXY protocol headers.
 func AddAllowedProxies(cidrs ...string) error {
-	allowed := allowedProxyIps
+	allowedProxyIpsLk.Lock()
+	defer allowedProxyIpsLk.Unlock()
 
 	for _, s := range cidrs {
 		_, ipn, err := net.ParseCIDR(s)
 		if err != nil {
 			return err
 		}
-		allowed = append(allowed, ipn)
+		allowedProxyIps = append(allowedProxyIps, ipn)
 	}
 
-	allowedProxyIps = allowed
 	return nil
 }
 
@@ -90,22 +99,30 @@ func AddAllowedProxiesSpf(spfhosts ...string) error {
 	return AddAllowedProxies(cidrs...)
 }
 
-// DetectProxy is a magictls filter that will detect proxy protocol headers
-// (both versions) and update local/remote addr based on these if the
-// source is an allowed proxy (see SetAllowedProxies).
+// DetectProxy is a magictls [Filter] that detects PROXY protocol headers
+// (both v1 and v2) and updates the connection's local/remote addresses
+// based on the information provided in the PROXY header.
+//
+// Only connections from allowed proxy IPs (see [SetAllowedProxies]) will
+// have their PROXY headers parsed. Connections from other sources will
+// pass through unchanged.
 func DetectProxy(cw *Conn, srv *Listener) error {
 	proxyAllow := false
 
+	allowedProxyIpsLk.RLock()
+	allowed := allowedProxyIps
+	allowedProxyIpsLk.RUnlock()
+
 	switch ipaddr := cw.r.(type) {
 	case *net.TCPAddr:
-		for _, n := range allowedProxyIps {
+		for _, n := range allowed {
 			if n.Contains(ipaddr.IP) {
 				proxyAllow = true
 				break
 			}
 		}
 	case *net.IPAddr:
-		for _, n := range allowedProxyIps {
+		for _, n := range allowed {
 			if n.Contains(ipaddr.IP) {
 				proxyAllow = true
 				break
@@ -122,8 +139,8 @@ func DetectProxy(cw *Conn, srv *Listener) error {
 		return err
 	}
 
-	// detect proxy
-	if bytes.Compare(buf[:12], []byte{0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0x0d, 0x0a, 0x51, 0x55, 0x49, 0x54, 0x0a}) == 0 {
+	// detect proxy protocol v2 signature: \r\n\r\n\x00\r\nQUIT\n
+	if bytes.Equal(buf[:12], []byte{0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0x0d, 0x0a, 0x51, 0x55, 0x49, 0x54, 0x0a}) {
 		// proxy protocol v2
 		var verCmd, fam uint8
 		verCmd = buf[12]
@@ -143,7 +160,7 @@ func DetectProxy(cw *Conn, srv *Listener) error {
 		}
 		cw.SkipPeek(16 + int(ln))
 		return nil
-	} else if bytes.Compare(buf[:6], []byte("PROXY ")) == 0 {
+	} else if bytes.Equal(buf[:6], []byte("PROXY ")) {
 		// proxy protocol v1
 		var pos int
 
@@ -180,11 +197,11 @@ func parseProxyLine(c *Conn, buf []byte) error {
 	}
 
 	s := bytes.Split(buf, []byte{' '})
-	if bytes.Compare(s[0], []byte("PROXY")) != 0 {
+	if !bytes.Equal(s[0], []byte("PROXY")) {
 		return &proxyError{version: 1, msg: "invalid proxy line provided"}
 	}
 
-	// see: magictls://www.haproxy.org/download/1.5/doc/proxy-protocol.txt
+	// see: https://www.haproxy.org/download/1.5/doc/proxy-protocol.txt
 	switch string(s[1]) {
 	case "UNKNOWN":
 		return nil // do nothing
@@ -204,7 +221,7 @@ func parseProxyLine(c *Conn, buf []byte) error {
 
 func parseProxyV2Data(c *Conn, verCmd, fam uint8, d []byte) error {
 	if verCmd>>4&0xf != 0x2 {
-		return &proxyError{version: 2, msg: "uynsupported header version"}
+		return &proxyError{version: 2, msg: "unsupported header version"}
 	}
 	switch verCmd & 0xf {
 	case 0x0: // LOCAL (health check, etc)

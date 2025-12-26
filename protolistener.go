@@ -5,12 +5,18 @@ import (
 	"net"
 )
 
+// protoListener is a net.Listener implementation that receives connections
+// for specific TLS ALPN-negotiated protocols. It is created by calling
+// Listener.ProtoListener with one or more protocol names.
 type protoListener struct {
-	proto  []string
-	queue  chan *queuePoint
-	parent *Listener
+	proto  []string         // registered protocol names
+	queue  chan *queuePoint // incoming connection queue
+	parent *Listener        // parent listener
 }
 
+// Accept waits for and returns the next connection to the listener.
+// Connections returned here have completed TLS handshake and negotiated
+// one of the protocols registered for this listener.
 func (p *protoListener) Accept() (net.Conn, error) {
 	pc, ok := <-p.queue
 	if !ok {
@@ -20,10 +26,13 @@ func (p *protoListener) Accept() (net.Conn, error) {
 	return pc.c, pc.e
 }
 
+// Addr returns the listener's network address.
 func (p *protoListener) Addr() net.Addr {
 	return p.parent.Addr()
 }
 
+// Close closes the protocol listener and unregisters it from the parent.
+// Any blocked Accept calls will return io.EOF.
 func (p *protoListener) Close() error {
 	if p.queue == nil {
 		return nil
