@@ -8,7 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"math/big"
 	"net"
@@ -61,7 +61,7 @@ func TestTLS(t *testing.T) {
 		return
 	}
 
-	buf, err := ioutil.ReadAll(c)
+	buf, err := io.ReadAll(c)
 	c.Close()
 	if err != nil {
 		t.Errorf("failed read: %s", err)
@@ -80,7 +80,7 @@ func TestTLS(t *testing.T) {
 		return
 	}
 
-	buf, err = ioutil.ReadAll(c)
+	buf, err = io.ReadAll(c)
 	c.Close()
 	if err != nil {
 		t.Errorf("failed read: %s", err)
@@ -105,7 +105,7 @@ func TestTLS(t *testing.T) {
 	// initialize tls
 	c = tls.Client(ctcp, &tls.Config{RootCAs: testP, ServerName: "localhost", NextProtos: []string{"b"}})
 
-	buf, err = ioutil.ReadAll(c)
+	buf, err = io.ReadAll(c)
 	c.Close()
 	if err != nil {
 		t.Errorf("failed read: %s", err)
@@ -132,7 +132,7 @@ func TestTLS(t *testing.T) {
 	// initialize tls
 	c = tls.Client(ctcp, &tls.Config{RootCAs: testP, ServerName: "localhost", NextProtos: []string{"b"}})
 
-	buf, err = ioutil.ReadAll(c)
+	buf, err = io.ReadAll(c)
 	c.Close()
 	if err != nil {
 		t.Errorf("failed read: %s", err)

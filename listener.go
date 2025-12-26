@@ -283,7 +283,8 @@ func (r *Listener) listenLoop(port net.Listener, filterOverride []Filter) {
 			// check for temporary error (e.g., too many open files)
 			// Note: net.Error.Temporary() is deprecated but this pattern
 			// is still used by net/http for accept loops.
-			if ne, ok := err.(net.Error); ok && ne.Temporary() { //nolint:staticcheck
+			//lint:ignore SA1019 Temporary() is still useful for accept loops
+			if ne, ok := err.(net.Error); ok && ne.Temporary() {
 				if tempDelay == 0 {
 					tempDelay = 5 * time.Millisecond
 				} else {
