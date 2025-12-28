@@ -101,6 +101,30 @@ func (r *Listener) ListenFilter(network, laddr string, filters []Filter) error {
 	return nil
 }
 
+// AddListener adds an existing net.Listener to the magictls listener. This is
+// useful for adding listeners obtained from net.FileListener during graceful
+// restarts, or for adding custom listener implementations.
+//
+// The listener will use the default filters (DetectProxy, DetectTLS).
+func (r *Listener) AddListener(l net.Listener) {
+	r.AddListenerFilter(l, nil)
+}
+
+// AddListenerFilter adds an existing net.Listener to the magictls listener
+// with custom filters. If filters is nil, the default filters are used.
+func (r *Listener) AddListenerFilter(l net.Listener, filters []Filter) {
+	if r.addr == nil {
+		r.addr = l.Addr()
+	}
+
+	r.portsLk.Lock()
+	defer r.portsLk.Unlock()
+
+	r.ports = append(r.ports, l)
+
+	go r.listenLoop(l, filters)
+}
+
 // ProtoListener returns a net.Listener that will receive connections for which
 // TLS is enabled and the specified protocol(s) have been negotiated between
 // client and server via TLS ALPN (Application-Layer Protocol Negotiation).
